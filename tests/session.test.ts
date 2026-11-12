@@ -361,10 +361,19 @@ describe('Session', () => {
   it('user_utterance while calling routes to pending askUser', async () => {
     setupTmpDir();
 
-    // Caller script: press_keys "1" → ask_user → end_call
+    // Caller script: press_keys "1" → say intro (triggers receptionist make_offer → off-1) →
+    // ask_user (off-1 is now in state.offers) → end_call
     // ask_user triggers io.askUser which emits needs_user and waits for the user's answer
     const callerLlm = fakeLlm([
       { tools: [{ name: 'press_keys', input: { digits: '1' } }] },
+      {
+        tools: [
+          {
+            name: 'say',
+            input: { text: "Hi, I'm an AI assistant calling to book a dental check-up." },
+          },
+        ],
+      },
       {
         tools: [
           {
@@ -381,7 +390,7 @@ describe('Session', () => {
       { tools: [{ name: 'end_call', input: { outcome: 'not_booked', summary: 'User confirmed time' } }] },
     ]);
 
-    // Receptionist: offer bs-1 and then text reply
+    // Receptionist: offer bs-1 (triggered by caller's say) and then text reply
     const recLlm = fakeLlm([
       { tools: [{ name: 'make_offer', input: { slotId: 'bs-1' } }] },
       { text: 'I can offer Tuesday the 17th at 9am.' },
@@ -421,9 +430,19 @@ describe('Session', () => {
   it('second choose_scenario during call → error, call continues', async () => {
     setupTmpDir();
 
-    // Caller that asks the user (so the call pauses and we can interject)
+    // Caller that asks the user (so the call pauses and we can interject).
+    // say step first so receptionist calls make_offer → off-1 enters state.offers
+    // before ask_user references it.
     const callerLlm = fakeLlm([
       { tools: [{ name: 'press_keys', input: { digits: '1' } }] },
+      {
+        tools: [
+          {
+            name: 'say',
+            input: { text: "Hi, I'm an AI assistant calling to book a dental check-up." },
+          },
+        ],
+      },
       {
         tools: [
           {
@@ -470,6 +489,74 @@ describe('Session', () => {
 
     // Resume the call — it should still be in progress
     await session.handle({ type: 'user_utterance', text: 'Yes' });
+    const callEnded = await session.waitFor('call_ended');
+    expect(callEnded).toBeDefined();
+
+    session.dispose();
+  });
+
+  it('user_utterance in calling state without active needs_user is ignored, not buffered', async () => {
+    // An utterance sent while calling but before any needs_user is emitted must be dropped
+    // so it cannot pre-approve a future ask_user question.
+    setupTmpDir();
+
+    // Caller: say intro → ask_user (off-1) → end_call.
+    // We send a user_utterance BEFORE needs_user is emitted (during the say step),
+    // then send the real answer only after needs_user arrives.
+    const callerLlm = fakeLlm([
+      { tools: [{ name: 'press_keys', input: { digits: '1' } }] },
+      {
+        tools: [
+          {
+            name: 'say',
+            input: { text: "Hi, I'm an AI assistant calling to book a dental check-up." },
+          },
+        ],
+      },
+      {
+        tools: [
+          {
+            name: 'ask_user',
+            input: {
+              question: 'Is Tuesday 9am okay?',
+              offerId: 'off-1',
+              approvalFor: ['slot'],
+            },
+          },
+        ],
+      },
+      { tools: [{ name: 'end_call', input: { outcome: 'not_booked', summary: 'Done' } }] },
+    ]);
+    const recLlm = fakeLlm([
+      { tools: [{ name: 'make_offer', input: { slotId: 'bs-1' } }] },
+      { text: 'Tuesday 9am.' },
+    ]);
+    const intakeLlm = fakeLlm([{ text: BRIGHT_SMILE_INTAKE_JSON }]);
+
+    const session = new TestSession(
+      makeDeps({
+        llms: {
+          caller: callerLlm,
+          receptionist: recLlm,
+          intake: intakeLlm,
+          interpret: fakeLlm([]),
+        },
+      }),
+    );
+
+    await session.handle({ type: 'choose_scenario', scenarioId: 'bright-smile' });
+    await session.waitFor('request_understood');
+    await session.handle({ type: 'confirm', yes: true });
+
+    // Send an utterance immediately after the call starts, while calling state is set
+    // but before any needs_user has been emitted. This must be ignored/dropped.
+    await session.handle({ type: 'user_utterance', text: 'early spurious answer' });
+
+    // Now wait for the real needs_user and answer it
+    await session.waitFor('needs_user');
+    await session.handle({ type: 'user_utterance', text: 'Yes, that works for me.' });
+
+    // The call should complete normally
     const callEnded = await session.waitFor('call_ended');
     expect(callEnded).toBeDefined();
 

@@ -81,6 +81,12 @@ export class Session {
    * the client may respond between the emit and the io.askUser call (microtask boundary).
    */
   private bufferedUserAnswer: string | null = null;
+  /**
+   * True while a needs_user event has been emitted and askUserForCall has not yet consumed it.
+   * Only utterances received in this window are buffered; all others in calling state are
+   * silently dropped so they cannot pre-approve a future question.
+   */
+  private needsUserPending: boolean = false;
 
   constructor(send: (m: ServerMsg) => void, deps: SessionDeps) {
     this.send = send;
@@ -136,6 +142,7 @@ export class Session {
       resolve(null);
     }
     this.bufferedUserAnswer = null;
+    this.needsUserPending = false;
   }
 
   // ─── Dispatcher ─────────────────────────────────────────────────────────────
@@ -197,10 +204,12 @@ export class Session {
           this.pendingUserAnswerTimer = null;
         }
         resolve(text);
-      } else {
-        // askUser hasn't been called yet (speakTo microtask gap) — buffer for it
+      } else if (this.needsUserPending) {
+        // Race window: needs_user was emitted but askUser hasn't set up its resolver yet.
         this.bufferedUserAnswer = text;
+        this.needsUserPending = false;
       }
+      // else: no active needs_user — ignore the utterance so it cannot pre-approve a future question
       return;
     }
 
@@ -340,7 +349,10 @@ export class Session {
 
     const session = this;
     const io: CallIO = {
-      emit: msg => session.send(msg),
+      emit: msg => {
+        if (msg.type === 'needs_user') session.needsUserPending = true;
+        session.send(msg);
+      },
       speak: (u, audio) => session.speakCall(u, audio),
       askUser: (q, timeoutMs, attempt) => session.askUserForCall(q, timeoutMs, attempt),
     };
@@ -475,6 +487,8 @@ export class Session {
    * bufferedUserAnswer and we consume it immediately here.
    */
   private askUserForCall(_question: string, timeoutMs: number, _attempt: number): Promise<string | null> {
+    // askUser has been called — clear the pending flag (the buffer was already populated or not)
+    this.needsUserPending = false;
     // Consume a buffered answer that arrived before we set up pendingUserAnswer
     if (this.bufferedUserAnswer !== null) {
       const answer = this.bufferedUserAnswer;
@@ -503,6 +517,7 @@ export class Session {
     this.pendingRequest = null;
     this.pendingClinic = null;
     this.bufferedUserAnswer = null;
+    this.needsUserPending = false;
   }
 
   private nextId(): string {
