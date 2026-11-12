@@ -4,3 +4,4 @@ dist/
 .superpowers/
 data/calendar.bookings.json
 hiyabrief.md
+.claude/worktrees/
