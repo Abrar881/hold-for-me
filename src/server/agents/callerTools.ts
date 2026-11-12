@@ -219,14 +219,20 @@ export function execLocal(
       const field = input['field'] as string;
       const profile = state.profile;
 
-      // Check top-level profile fields (name, dob, phone, existingPatientAt)
-      if (field in profile && field !== 'fields') {
-        const value = (profile as Record<string, unknown>)[field];
-        return { content: String(value) };
+      // Typed lookup of known top-level Profile fields — no cast needed
+      const topLevel: Record<string, string | string[]> = {
+        name: profile.name,
+        dob: profile.dob,
+        phone: profile.phone,
+        existingPatientAt: profile.existingPatientAt,
+      };
+      if (Object.prototype.hasOwnProperty.call(topLevel, field)) {
+        const value = topLevel[field];
+        return { content: Array.isArray(value) ? value.join(', ') : value };
       }
 
       // Check extra fields
-      if (field in profile.fields) {
+      if (Object.prototype.hasOwnProperty.call(profile.fields, field)) {
         return { content: profile.fields[field] };
       }
 
