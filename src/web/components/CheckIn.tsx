@@ -22,6 +22,7 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, spee
   const [listening, setListening] = useState(false);
   // Real state so Yes/No buttons re-render when disabled.
   const [sent, setSent] = useState(false);
+  const [micError, setMicError] = useState(false);
   const stopRef = useRef<(() => void) | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
 
@@ -68,6 +69,7 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, spee
         .catch(() => {
           recorderRef.current = null;
           setListening(false);
+          setMicError(true);
         });
       return () => {
         recorderRef.current?.stop();
@@ -89,6 +91,7 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, spee
         );
       } catch {
         setListening(false);
+        setMicError(true);
       }
       return () => {
         stopRef.current?.();
@@ -133,6 +136,13 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, spee
       <div className="card-body">
         <p className="checkin-question">{question}</p>
 
+        {/* Mic error notice */}
+        {micError && (
+          <p className="mic-error" role="alert">
+            Microphone unavailable — please type your answer below.
+          </p>
+        )}
+
         {/* Countdown ring */}
         <div className="checkin-countdown">
           <svg className="countdown-ring" viewBox="0 0 24 24">
@@ -163,8 +173,8 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, spee
           </div>
         )}
 
-        {/* Text input fallback */}
-        {!canSpeak && (
+        {/* Text input fallback — shown when no mic capability or runtime mic failed */}
+        {(!canSpeak || micError) && (
           <div className="text-input-wrap" style={{ marginBottom: '0.75rem' }}>
             <textarea
               className="text-input"

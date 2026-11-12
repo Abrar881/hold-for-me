@@ -26,6 +26,7 @@ export function RequestPanel({ state, capabilities, send }: Props) {
   const [finalText, setFinalText] = useState('');
   const [textInput, setTextInput] = useState('');
   const [selectedScenario, setSelectedScenario] = useState('');
+  const [micError, setMicError] = useState(false);
   const stopRef = useRef<(() => void) | null>(null);
   const recorderRef = useRef<Recorder | null>(null);
 
@@ -38,12 +39,18 @@ export function RequestPanel({ state, capabilities, send }: Props) {
   phaseRef.current = state.phase;
   const speechModeRef = useRef(state.speechMode);
   speechModeRef.current = state.speechMode;
+  // interimRef lets stopRecording always read the latest interim without
+  // being included in its useCallback deps — eliminates the stale closure
+  // that caused the spacebar PTT to drop dictated text in browser speech mode.
+  const interimRef = useRef(interim);
+  interimRef.current = interim;
 
   const canSpeak = capabilities.recognition && capabilities.mic;
   const isUnderstanding = state.phase === 'understanding';
 
   const startRecording = useCallback(() => {
     if (recordingRef.current) return;
+    setMicError(false);
     setRecording(true);
     setInterim('');
     setFinalText('');
@@ -67,6 +74,7 @@ export function RequestPanel({ state, capabilities, send }: Props) {
         .catch(() => {
           recorderRef.current = null;
           setRecording(false);
+          setMicError(true);
         });
     } else {
       try {
@@ -81,10 +89,15 @@ export function RequestPanel({ state, capabilities, send }: Props) {
         );
       } catch {
         setRecording(false);
+        setMicError(true);
       }
     }
   }, [send]);
 
+  // stopRecording does NOT list `interim` as a dep — instead it reads
+  // interimRef.current, which is always the latest value. This means the
+  // function identity is stable, so the [] -deps spacebar effect captures the
+  // correct version and spacebar-release correctly sends the dictated text.
   const stopRecording = useCallback(() => {
     if (speechModeRef.current === 'openai') {
       recorderRef.current?.stop();
@@ -96,12 +109,13 @@ export function RequestPanel({ state, capabilities, send }: Props) {
         stopRef.current = null;
       }
       setRecording(false);
-      if (interim) {
-        send({ type: 'user_utterance', text: interim });
+      const text = interimRef.current;
+      if (text) {
+        send({ type: 'user_utterance', text });
         setInterim('');
       }
     }
-  }, [send, interim]);
+  }, [send]); // `interim` deliberately excluded — read via interimRef
 
   // Spacebar PTT — stable effect with [] deps; reads live values via refs.
   useEffect(() => {
@@ -181,8 +195,15 @@ export function RequestPanel({ state, capabilities, send }: Props) {
           </div>
         )}
 
+        {/* Mic error notice */}
+        {micError && (
+          <p className="mic-error" role="alert">
+            Microphone unavailable — please type your request below.
+          </p>
+        )}
+
         {/* Voice input */}
-        {canSpeak && state.phase === 'idle' && (
+        {canSpeak && state.phase === 'idle' && !micError && (
           <div className="ptt-wrap">
             <button
               className={`ptt-btn${recording ? ' active' : ''}`}
@@ -203,8 +224,8 @@ export function RequestPanel({ state, capabilities, send }: Props) {
           </div>
         )}
 
-        {/* Text fallback */}
-        {!canSpeak && state.phase === 'idle' && (
+        {/* Text fallback — always shown when no mic, or after mic error */}
+        {(!canSpeak || micError) && state.phase === 'idle' && (
           <div className="text-input-wrap">
             <textarea
               className="text-input"
