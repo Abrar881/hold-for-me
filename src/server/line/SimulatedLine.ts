@@ -23,17 +23,21 @@ export type SimulatedLineOpts = {
   today: string;
 };
 
-function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
+export function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
+  // Reject immediately if already aborted.
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
   return new Promise((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(t);
+      reject(signal.reason);
+    };
+    const t = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 

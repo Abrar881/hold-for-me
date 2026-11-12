@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { SimulatedLine } from '../src/server/line/SimulatedLine.js';
+import { describe, it, expect, vi } from 'vitest';
+import { SimulatedLine, defaultSleep } from '../src/server/line/SimulatedLine.js';
 import type { Clinic, Profile } from '../src/server/data.js';
 import { fakeLlm } from './helpers/fakeLlm.js';
 
@@ -161,5 +161,27 @@ describe('SimulatedLine', () => {
     await line.dial(signal);
     const events = await line.sendDigits('2', signal);
     expect(events).toEqual([{ kind: 'hangup', reason: 'closed' }]);
+  });
+
+  it('defaultSleep removes abort listener after normal completion — no leak', async () => {
+    const ac = new AbortController();
+    const removeSpy = vi.spyOn(ac.signal, 'removeEventListener');
+
+    // Sleep completes normally (1 ms).
+    await defaultSleep(1, ac.signal);
+
+    // The timeout callback must remove the abort listener.
+    expect(removeSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+
+    // Aborting after completion should not cause any additional effect.
+    ac.abort();
+    // Still one call — the { once: true } abort path never fired.
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaultSleep rejects immediately when signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(defaultSleep(10_000, ac.signal)).rejects.toThrow();
   });
 });
