@@ -31,15 +31,22 @@ describe('loadCalendar', () => {
 });
 
 describe('loadClinics', () => {
-  it('loads three clinics with resolved slots', () => {
+  it('loads four clinics with resolved slots', () => {
     const clinics = loadClinics('data/clinics', TODAY);
-    expect(clinics).toHaveLength(3);
+    expect(clinics).toHaveLength(4);
 
     const bs = clinics.find(c => c.id === 'bright-smile');
     expect(bs).toBeDefined();
     expect(bs!.slots[0].start).toBe('2026-11-17T09:00');
     expect(bs!.slots[0].end).toBe('2026-11-17T09:30');
     expect(bs!.slots[0].slotId).toBe('bs-1');
+  });
+
+  it('sunny-eyes IVR has a closed branch and loads', () => {
+    const clinics = loadClinics('data/clinics', TODAY);
+    const se = clinics.find(c => c.id === 'sunny-eyes');
+    expect(se).toBeDefined();
+    expect(se!.ivr.some(node => node.terminal === 'closed')).toBe(true);
   });
 
   it('rejects a clinic whose IVR option points to a missing node', () => {

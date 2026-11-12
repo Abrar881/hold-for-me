@@ -1,0 +1,27 @@
+{
+  "id": "sunny-eyes",
+  "name": "Sunny Eyes Opticians",
+  "service": "eye test",
+  "receptionistName": "Tom",
+  "persona": "Cheerful optician's receptionist. Offers the first available slot and is flexible with timing.",
+  "holdSeconds": 5,
+  "ivr": [
+    {
+      "id": "root",
+      "prompt": "Thanks for calling Sunny Eyes Opticians. To book an appointment press 1.",
+      "options": { "1": "closed" }
+    },
+    {
+      "id": "closed",
+      "prompt": "We're currently closed. Our opening hours are 9 to 5.",
+      "options": {},
+      "terminal": "closed"
+    }
+  ],
+  "slots": [
+    { "slotId": "se-1", "rel": { "weekOffset": 1, "weekday": 2, "time": "10:00" }, "durationMin": 30 },
+    { "slotId": "se-2", "rel": { "weekOffset": 1, "weekday": 5, "time": "14:30" }, "durationMin": 30 }
+  ],
+  "quirks": {},
+  "demoRequest": "Book me an eye test at Sunny Eyes next week, any time."
+}
