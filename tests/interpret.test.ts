@@ -46,7 +46,8 @@ describe('interpretAnswer', () => {
   });
 
   it('llm returns refusal stop → unclear (never yes)', async () => {
-    const llm = fakeLlm([{ stop: 'refusal' }]);
+    // text is valid yes-JSON so the test fails if the refusal guard is removed
+    const llm = fakeLlm([{ text: '{"decision":"yes","note":"x"}', stop: 'refusal' }]);
     const result = await interpretAnswer('hmm well maybe', QUESTION, llm);
     expect(result.decision).toBe('unclear');
     expect(result.decision).not.toBe('yes');
