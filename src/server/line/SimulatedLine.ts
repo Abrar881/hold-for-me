@@ -6,7 +6,7 @@
  */
 import type { Clinic, Profile } from '../data.js';
 import type { LlmCall } from '../llm.js';
-import type { PhoneLine, LineEvent } from './PhoneLine.js';
+import type { PhoneLine, LineEvent, OnLineEvent } from './PhoneLine.js';
 import { Ivr } from './ivr.js';
 import { SlotBook } from './slotBook.js';
 import { Receptionist } from './receptionist.js';
@@ -71,131 +71,122 @@ export class SimulatedLine implements PhoneLine {
     return this.book;
   }
 
-  async dial(signal: AbortSignal): Promise<LineEvent[]> {
+  async dial(signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]> {
+    const out = collect(onEvent);
     const root = this.ivrMachine.current();
-    const events: LineEvent[] = [];
 
     if (root.terminal !== undefined) {
       // R3: root is itself a terminal — speak its prompt (if non-empty), then resolve
       if (root.prompt) {
-        events.push({ kind: 'ivr', text: root.prompt });
+        out.push({ kind: 'ivr', text: root.prompt });
       }
-      events.push(...(await this.resolveTerminal(root.terminal, signal)));
+      await this.resolveTerminal(root.terminal, signal, out.push);
     } else {
-      events.push({ kind: 'ivr', text: root.prompt });
+      out.push({ kind: 'ivr', text: root.prompt });
     }
 
-    return events;
+    return out.events;
   }
 
-  async sendDigits(d: string, signal: AbortSignal): Promise<LineEvent[]> {
+  async sendDigits(d: string, signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]> {
+    const out = collect(onEvent);
     const result = this.ivrMachine.press(d);
-    const events: LineEvent[] = [];
 
     switch (result.kind) {
       case 'prompt':
         // Valid navigation to a non-terminal node, or wrong-key sorry text (N1)
-        events.push({ kind: 'ivr', text: result.text });
+        out.push({ kind: 'ivr', text: result.text });
         break;
 
       case 'invalid':
         // Press on a terminal node — treat as ivr event
-        events.push({ kind: 'ivr', text: result.text });
+        out.push({ kind: 'ivr', text: result.text });
         break;
 
       case 'disconnected':
-        events.push({ kind: 'ivr', text: result.text });
-        events.push({ kind: 'hangup', reason: 'ivr_disconnect' });
+        out.push({ kind: 'ivr', text: result.text });
+        out.push({ kind: 'hangup', reason: 'ivr_disconnect' });
         break;
 
       case 'terminal': {
         // R3: speak the terminal node's prompt (if non-empty), then resolve
         const node = this.ivrMachine.current();
         if (node.prompt) {
-          events.push({ kind: 'ivr', text: node.prompt });
+          out.push({ kind: 'ivr', text: node.prompt });
         }
-        events.push(...(await this.resolveTerminal(result.terminal, signal)));
+        await this.resolveTerminal(result.terminal, signal, out.push);
         break;
       }
     }
 
-    return events;
+    return out.events;
   }
 
-  async say(text: string, signal: AbortSignal): Promise<LineEvent[]> {
+  async say(text: string, signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]> {
+    const out = collect(onEvent);
     if (this.receptionist === undefined) {
-      return [{ kind: 'ivr', text: 'Please use your keypad.' }];
+      out.push({ kind: 'ivr', text: 'Please use your keypad.' });
+      return out.events;
     }
 
     const result = await this.receptionist.respond(text, signal);
-    const events: LineEvent[] = [
-      {
-        kind: 'speech',
-        speaker: 'receptionist',
-        text: result.text,
-        offer: result.offer,
-        booking: result.booking,
-      },
-    ];
+    out.push({
+      kind: 'speech',
+      speaker: 'receptionist',
+      text: result.text,
+      offer: result.offer,
+      booking: result.booking,
+    });
 
     if (result.hungUp) {
-      events.push({ kind: 'hangup', reason: 'receptionist' });
+      out.push({ kind: 'hangup', reason: 'receptionist' });
     }
 
-    return events;
+    return out.events;
   }
 
   // ─── Terminal resolution ────────────────────────────────────────────────────
 
+  /** Pushes terminal events as they happen: the hold event before the hold sleep. */
   private async resolveTerminal(
     terminal: 'hold' | 'receptionist' | 'closed',
     signal: AbortSignal,
-  ): Promise<LineEvent[]> {
-    const events: LineEvent[] = [];
-
+    push: (e: LineEvent) => void,
+  ): Promise<void> {
     switch (terminal) {
       case 'hold': {
         const holdMs = this.clinic.holdSeconds * this.holdScale * 1000;
-        events.push({ kind: 'hold', seconds: this.clinic.holdSeconds });
+        push({ kind: 'hold', seconds: this.clinic.holdSeconds });
         // May throw AbortError if signal fires during sleep
         await this.sleep(holdMs, signal);
-        this.receptionist = new Receptionist(
-          this.clinic,
-          this.book,
-          this.profile,
-          this.llm,
-          this.today,
-        );
-        events.push({
-          kind: 'speech',
-          speaker: 'receptionist',
-          text: this.receptionist.greet(),
-        });
+        this.connectReceptionist(push);
         break;
       }
 
-      case 'receptionist': {
-        this.receptionist = new Receptionist(
-          this.clinic,
-          this.book,
-          this.profile,
-          this.llm,
-          this.today,
-        );
-        events.push({
-          kind: 'speech',
-          speaker: 'receptionist',
-          text: this.receptionist.greet(),
-        });
+      case 'receptionist':
+        this.connectReceptionist(push);
         break;
-      }
 
-      case 'closed': {
-        events.push({ kind: 'hangup', reason: 'closed' });
+      case 'closed':
+        push({ kind: 'hangup', reason: 'closed' });
         break;
-      }
     }
-
-    return events;
   }
+
+  private connectReceptionist(push: (e: LineEvent) => void): void {
+    this.receptionist = new Receptionist(this.clinic, this.book, this.profile, this.llm, this.today);
+    push({ kind: 'speech', speaker: 'receptionist', text: this.receptionist.greet() });
+  }
+}
+
+/** Collects events for the return value and forwards each one to onEvent immediately. */
+function collect(onEvent?: OnLineEvent): { events: LineEvent[]; push: (e: LineEvent) => void } {
+  const events: LineEvent[] = [];
+  return {
+    events,
+    push: e => {
+      events.push(e);
+      onEvent?.(e);
+    },
+  };
 }

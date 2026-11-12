@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SimulatedLine, defaultSleep } from '../src/server/line/SimulatedLine.js';
 import type { Clinic, Profile } from '../src/server/data.js';
+import type { LineEvent } from '../src/server/line/PhoneLine.js';
 import { fakeLlm } from './helpers/fakeLlm.js';
 
 /** Bright Smile Dental fixture — mirrors the real JSON but with concrete slot dates. */
@@ -183,5 +184,55 @@ describe('SimulatedLine', () => {
     const ac = new AbortController();
     ac.abort();
     await expect(defaultSleep(10_000, ac.signal)).rejects.toThrow();
+  });
+
+  it('onEvent receives the hold event before the hold sleep resolves, then the greeting', async () => {
+    const signal = new AbortController().signal;
+    let releaseSleep!: () => void;
+    let sleepStarted!: () => void;
+    const sleeping = new Promise<void>(r => (sleepStarted = r));
+    const line = new SimulatedLine(CLINIC, PROFILE, fakeLlm([]), {
+      holdScale: 1,
+      sleep: () =>
+        new Promise<void>(resolve => {
+          releaseSleep = resolve;
+          sleepStarted();
+        }),
+      today: TODAY,
+    });
+    const live: LineEvent[] = [];
+    const dialLive: LineEvent[] = [];
+
+    await line.dial(signal, e => dialLive.push(e));
+    expect(dialLive).toEqual([{ kind: 'ivr', text: CLINIC.ivr[0].prompt }]);
+
+    const pending = line.sendDigits('1', signal, e => live.push(e));
+    await sleeping;
+    expect(live).toEqual([{ kind: 'hold', seconds: 8 }]);
+
+    releaseSleep();
+    const events = await pending;
+    expect(live).toHaveLength(2);
+    expect(live[1]).toMatchObject({ kind: 'speech', speaker: 'receptionist' });
+    // Same events, same objects, in the returned array
+    expect(events).toEqual(live);
+    expect(events[0]).toBe(live[0]);
+  });
+
+  it('say forwards receptionist speech and hangup to onEvent', async () => {
+    const signal = new AbortController().signal;
+    const llm = fakeLlm([
+      { tools: [{ name: 'end_call', input: {} }], stop: 'tool_use' },
+      { text: 'Goodbye!' },
+    ]);
+    const line = new SimulatedLine(CLINIC, PROFILE, llm, { holdScale: 0, sleep: async () => {}, today: TODAY });
+    await line.dial(signal);
+    await line.sendDigits('1', signal);
+
+    const live: LineEvent[] = [];
+    const events = await line.say('Thanks, bye', signal, e => live.push(e));
+
+    expect(live.map(e => e.kind)).toEqual(['speech', 'hangup']);
+    expect(events).toEqual(live);
   });
 });

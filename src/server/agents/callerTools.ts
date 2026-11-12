@@ -117,6 +117,12 @@ export const callerToolDefs: CallerToolDef[] = [
           items: { type: 'string', enum: ['slot', 'fee'] },
           description: 'Which approvals this question seeks.',
         },
+        field: {
+          type: 'string',
+          description:
+            'When asking for a missing piece of info, the name of that info (e.g. "insuranceNumber"). ' +
+            'The answer is recorded under this name for provide_info with source="user".',
+        },
       },
       required: ['question'],
       additionalProperties: false,

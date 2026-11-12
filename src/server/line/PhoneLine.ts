@@ -14,13 +14,20 @@ export type LineEvent =
   | { kind: 'speech'; speaker: 'receptionist'; text: string; offer?: Offer; booking?: Booking }
   | { kind: 'hangup'; reason: 'receptionist' | 'ivr_disconnect' | 'closed' };
 
+/**
+ * Optional live-event callback: called for each event the moment it happens
+ * (e.g. a hold event before the hold elapses). Methods still return the full
+ * event array for the call.
+ */
+export type OnLineEvent = (e: LineEvent) => void;
+
 export interface PhoneLine {
   /** Place the call; returns initial events (IVR prompt or immediate terminal). */
-  dial(signal: AbortSignal): Promise<LineEvent[]>;
+  dial(signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]>;
   /** Send DTMF digits; returns IVR navigation or terminal resolution events. */
-  sendDigits(d: string, signal: AbortSignal): Promise<LineEvent[]>;
+  sendDigits(d: string, signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]>;
   /** Speak to the receptionist (or get a keypad-hint if not yet connected). */
-  say(text: string, signal: AbortSignal): Promise<LineEvent[]>;
+  say(text: string, signal: AbortSignal, onEvent?: OnLineEvent): Promise<LineEvent[]>;
   /** The underlying slot book — orchestrator seam used for gating and booking. */
   slotBook(): SlotBook;
 }

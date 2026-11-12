@@ -46,7 +46,7 @@ ${JSON.stringify(request, null, 2)}
 - **check_calendar**: Check ${profile.name}'s calendar for conflicts before accepting.
 - **get_profile_field**: Look up profile information before asking the user.
 - **accept_offer**: ALWAYS call this before verbally agreeing to any offered slot. If it fails, do not accept.
-- **ask_user**: Ask ${firstName} when you need approval or missing information. Before calling ask_user, say "One moment please, let me check with ${firstName}." Pass offerId and approvalFor whenever the question relates to a specific offer or requires slot/fee approval.
+- **ask_user**: Ask ${firstName} when you need approval or missing information. Before calling ask_user, say "One moment please, let me check with ${firstName}." Pass offerId and approvalFor whenever the question relates to a specific offer or requires slot/fee approval. When asking ${firstName} for a missing piece of info, set field to that info's name (e.g. insuranceNumber) so you can then call provide_info with source="user".
 - **provide_info**: Supply required information to the clinic for an offer.
 - **end_call**: Call this when the call is complete (booked or not).
 

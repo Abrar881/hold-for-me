@@ -9,7 +9,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { Clinic } from './data.js';
 import type { LlmCall } from './llm.js';
-import type { PhoneLine, LineEvent } from './line/PhoneLine.js';
+import type { PhoneLine, LineEvent, OnLineEvent } from './line/PhoneLine.js';
 import type { SpeechProvider } from './speech/SpeechProvider.js';
 import type { ServerMsg } from '../shared/protocol.js';
 import type { ApprovalKind, CallOutcome, Offer, Speaker, TranscriptLine } from '../shared/types.js';
@@ -100,6 +100,8 @@ class Call {
   private receptionistConnected = false;
   private disclosed = false;
   private hangup: Extract<LineEvent, { kind: 'hangup' }>['reason'] | undefined;
+  private eventQueue: Promise<unknown> = Promise.resolve();
+  private readonly handled = new WeakMap<LineEvent, Promise<string[]>>();
 
   constructor(
     private readonly state: CallState,
@@ -124,7 +126,7 @@ class Call {
   private async loop(): Promise<CallOutcome> {
     this.checkAbort();
     this.setPhase('dialing');
-    const heard = await this.renderEvents(await this.deps.line.dial(this.signal));
+    const heard = await this.lineCall(onEvent => this.deps.line.dial(this.signal, onEvent));
     if (this.hangup) return this.finishHangup();
     const messages: MessageParam[] = [{ role: 'user', content: `Call connected. You hear:\n${heard}` }];
 
@@ -132,7 +134,7 @@ class Call {
       this.checkAbort();
       const overTurns = iteration >= MAX_ITERATIONS;
       if (overTurns || this.now() - this.startedAt >= MAX_CALL_MS) {
-        await this.speakAgent(GOODBYE_LINE);
+        await this.sayGoodbye();
         const limit = overTurns ? `the ${MAX_ITERATIONS}-turn limit` : 'the 5-minute call limit';
         return this.finish(this.bookedStatus(), `The call was stopped after reaching ${limit}. Please try again later.`);
       }
@@ -174,7 +176,7 @@ class Call {
           const digits = String(input['digits'] ?? '');
           this.deps.io.emit({ type: 'ivr_key', digits });
           this.log('agent', `Pressed ${digits}`, 'ivr_key');
-          return { content: await this.renderEvents(await this.deps.line.sendDigits(digits, this.signal)) };
+          return { content: await this.lineCall(onEvent => this.deps.line.sendDigits(digits, this.signal, onEvent)) };
         }
         case 'say':
           return { content: await this.agentSay(String(input['text'] ?? '')) };
@@ -199,6 +201,7 @@ class Call {
     const question = String(input['question'] ?? '');
     const offerId = typeof input['offerId'] === 'string' ? input['offerId'] : undefined;
     const approvalFor = Array.isArray(input['approvalFor']) ? (input['approvalFor'] as ApprovalKind[]) : [];
+    const field = typeof input['field'] === 'string' && input['field'] ? input['field'] : undefined;
     const resumePhase = this.phase ?? 'talking';
     this.setPhase('paused');
     try {
@@ -210,8 +213,8 @@ class Call {
         this.log('user', answer);
         const { decision } = await interpretAnswer(answer, question, this.deps.interpretLlm);
         this.checkAbort();
-        const field = decision === 'yes' ? this.inferField(question) : undefined;
-        this.state.userAnswers.push(field ? { field, text: answer } : { text: answer });
+        // Only a clear "yes" answer counts as the user supplying `field` (never unclear/no).
+        this.state.userAnswers.push(field && decision === 'yes' ? { field, text: answer } : { text: answer });
         if (decision === 'unclear') continue;
         if (decision === 'yes' && offerId && approvalFor.length > 0) {
           this.state.approvals.push({ offerId, kinds: approvalFor });
@@ -224,52 +227,51 @@ class Call {
     }
   }
 
-  /**
-   * ask_user has no field parameter, so tag the answer with a required-info
-   * field of a known offer when the question names it (e.g. "insurance number").
-   */
-  private inferField(question: string): string | undefined {
-    const q = question.toLowerCase();
-    for (const offer of this.state.offers.values()) {
-      const hit = offer.conditions.requiredInfo?.find(
-        f => q.includes(f.toLowerCase()) || q.includes(f.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()),
-      );
-      if (hit) return hit;
-    }
-    return undefined;
-  }
-
   // ─── Line events and speech ─────────────────────────────────────────────────
 
-  /** Emits/speaks each event and returns what the caller heard, as text. */
-  private async renderEvents(events: LineEvent[]): Promise<string> {
+  /**
+   * Runs a line operation. Each event is emitted and spoken the moment the line
+   * reports it (onEvent); the returned array is used only to build what the
+   * caller heard. Events the line did not report live are handled here.
+   */
+  private async lineCall(op: (onEvent: OnLineEvent) => Promise<LineEvent[]>): Promise<string> {
+    const events = await op(e => void this.handleEvent(e));
     const heard: string[] = [];
-    for (const ev of events) {
-      if (ev.kind !== 'hold' && this.onHold) this.endHold();
-      switch (ev.kind) {
-        case 'ivr':
-          this.setPhase('ivr');
-          heard.push(`Phone menu: "${await this.hear(ev.text, 'ivr')}"`);
-          break;
-        case 'hold':
-          this.setPhase('hold');
-          this.onHold = true;
-          this.deps.io.emit({ type: 'hold', state: 'start', seconds: ev.seconds });
-          this.log('ivr', `On hold (${ev.seconds}s)`, 'hold_start');
-          heard.push(`[On hold for ${ev.seconds} seconds]`);
-          break;
-        case 'speech':
-          this.receptionistConnected = true;
-          this.setPhase('talking');
-          heard.push(`Receptionist: "${await this.hear(ev.text, 'receptionist')}"`);
-          if (ev.offer) heard.push(this.noteOffer(ev.offer));
-          break;
-        case 'hangup':
-          this.hangup = ev.reason;
-          break;
-      }
-    }
+    for (const ev of events) heard.push(...(await (this.handled.get(ev) ?? this.handleEvent(ev))));
     return heard.length > 0 ? heard.join('\n') : SILENCE;
+  }
+
+  /** Queues an event so UI emission and playback keep line order; resolves to its heard lines. */
+  private handleEvent(ev: LineEvent): Promise<string[]> {
+    const p = this.eventQueue.then(() => this.processEvent(ev));
+    this.eventQueue = p.catch(() => undefined); // also marks p handled if the line call fails first
+    this.handled.set(ev, p);
+    return p;
+  }
+
+  private async processEvent(ev: LineEvent): Promise<string[]> {
+    if (ev.kind !== 'hold' && this.onHold) this.endHold();
+    switch (ev.kind) {
+      case 'ivr':
+        this.setPhase('ivr');
+        return [`Phone menu: "${await this.hear(ev.text, 'ivr')}"`];
+      case 'hold':
+        this.setPhase('hold');
+        this.onHold = true;
+        this.deps.io.emit({ type: 'hold', state: 'start', seconds: ev.seconds });
+        this.log('ivr', `On hold (${ev.seconds}s)`, 'hold_start');
+        return [`[On hold for ${ev.seconds} seconds]`];
+      case 'speech': {
+        this.receptionistConnected = true;
+        this.setPhase('talking');
+        const heard = [`Receptionist: "${await this.hear(ev.text, 'receptionist')}"`];
+        if (ev.offer) heard.push(this.noteOffer(ev.offer));
+        return heard;
+      }
+      case 'hangup':
+        this.hangup = ev.reason;
+        return [];
+    }
   }
 
   private noteOffer(offer: Offer): string {
@@ -311,7 +313,18 @@ class Call {
 
   private async agentSay(raw: string): Promise<string> {
     const text = await this.speakAgent(raw);
-    return this.renderEvents(await this.deps.line.say(text, this.signal));
+    return this.lineCall(onEvent => this.deps.line.say(text, this.signal, onEvent));
+  }
+
+  /** Limit reached: the receptionist still hears the goodbye; its reply is ignored. */
+  private async sayGoodbye(): Promise<void> {
+    const text = await this.speakAgent(GOODBYE_LINE);
+    if (this.hangup) return;
+    try {
+      await this.deps.line.say(text, this.signal);
+    } catch (err) {
+      if (this.signal.aborted) throw err;
+    }
   }
 
   private async speakTo(channel: 'call' | 'user', speaker: Speaker, text: string): Promise<void> {

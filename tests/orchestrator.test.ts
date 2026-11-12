@@ -13,7 +13,8 @@ import { fakeIo, fakeSpeech } from './helpers/fakeIo.js';
 type Script = Parameters<typeof fakeLlm>[0];
 
 const TODAY = '2026-11-12';
-const clinic = loadClinics('data/clinics', TODAY).find(c => c.id === 'clearview')!;
+const clinics = loadClinics('data/clinics', TODAY);
+const clinicById = (id: string) => clinics.find(c => c.id === id)!;
 const profile = loadProfile('data', TODAY);
 const calendar = loadCalendar('data', TODAY);
 
@@ -60,9 +61,12 @@ function setup(opts: {
   answers?: (string | null)[];
   speech?: SpeechProvider;
   now?: () => number;
+  clinicId?: string;
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }) {
+  const clinic = clinicById(opts.clinicId ?? 'clearview');
   const state: CallState = {
-    request: REQUEST,
+    request: { ...REQUEST, clinicId: clinic.id },
     profile,
     calendar,
     approvals: [],
@@ -74,7 +78,7 @@ function setup(opts: {
   const interpretLlm = fakeLlm(opts.interpret ?? []);
   const line = new SimulatedLine(clinic, profile, recLlm, {
     holdScale: 0,
-    sleep: async () => {},
+    sleep: opts.sleep ?? (async () => {}),
     today: TODAY,
   });
   const io = fakeIo(opts.answers ?? []);
@@ -447,5 +451,132 @@ describe('runCall', () => {
 
     await expect(h.run(ac.signal)).rejects.toMatchObject({ name: 'AbortError' });
     expect(h.llm.calls).toHaveLength(3);
+  });
+
+  it('limit goodbye is sent down the line to a connected receptionist; reply ignored', async () => {
+    const h = setup({
+      caller: [PRESS_1, INTRO, ...Array.from({ length: 38 }, () => WAIT)],
+      receptionist: [{ text: 'Hello, how can I help?' }, { text: 'No problem, goodbye.' }],
+    });
+
+    const outcome = await h.run();
+
+    expect(h.llm.calls).toHaveLength(40);
+    expect(h.recLlm.calls).toHaveLength(2);
+    expect(lastMessage(h.recLlm.calls[1])).toEqual({ role: 'user', content: GOODBYE });
+    expect(h.io.spoken.some(s => s.text === 'No problem, goodbye.')).toBe(false);
+    expect(outcome.status).toBe('not_booked');
+  });
+
+  // ─── R11: ask_user field → provide_info(source: user) ─────────────────────────
+
+  /** Riverside (new patient): rv-1 = Wed 2026-11-18 10:00, £20 fee, needs insuranceNumber. */
+  const RIVERSIDE_OFFER: Script = [
+    { tools: [{ name: 'make_offer', input: { slotId: 'rv-1' } }] },
+    { text: 'Wednesday the 18th at 10am. New patients pay £20 and we need an insurance number.' },
+  ];
+
+  it('ask_user with field records the answer and provide_info(source user) succeeds → booked', async () => {
+    const question =
+      'Riverside can do Wed 18 Nov at 10am with a £20 new-patient fee, and they need your insurance number. OK, and what is it?';
+    const h = setup({
+      clinicId: 'riverside',
+      caller: [
+        INTRO,
+        {
+          tools: [
+            { name: 'say', input: { text: 'One moment please, let me check with Alex.' } },
+            {
+              name: 'ask_user',
+              input: { question, offerId: 'off-1', approvalFor: ['fee'], field: 'insuranceNumber' },
+            },
+          ],
+        },
+        {
+          tools: [
+            { name: 'accept_offer', input: { offerId: 'off-1' } },
+            { name: 'provide_info', input: { offerId: 'off-1', field: 'insuranceNumber', source: 'user' } },
+          ],
+        },
+        { tools: [{ name: 'say', input: { text: 'Yes please book it. My insurance number is RX-1234.' } }] },
+        endCall('booked', 'Booked Wednesday 18 November at 10am.'),
+      ],
+      receptionist: [
+        ...RIVERSIDE_OFFER,
+        { text: 'Sure.' },
+        { tools: [{ name: 'book_slot', input: { offerId: 'off-1' } }] },
+        { text: "All booked, see you Wednesday." },
+      ],
+      answers: ['yes, and my insurance number is RX-1234'],
+    });
+
+    const outcome = await h.run();
+
+    expect(h.state.userAnswers).toEqual([
+      { field: 'insuranceNumber', text: 'yes, and my insurance number is RX-1234' },
+    ]);
+    expect(h.state.approvals).toEqual([{ offerId: 'off-1', kinds: ['fee'] }]);
+    const results = toolResults(h.llm.calls[3]);
+    expect(results.map(r => r.is_error ?? false)).toEqual([false, false]);
+    expect(outcome.status).toBe('booked');
+    expect(outcome.booking).toMatchObject({ start: '2026-11-18T10:00', feeGbp: 20 });
+  });
+
+  it('provide_info(source user) for a field never asked → isError, not booked', async () => {
+    const h = setup({
+      clinicId: 'riverside',
+      caller: [
+        INTRO,
+        { tools: [{ name: 'provide_info', input: { offerId: 'off-1', field: 'insuranceNumber', source: 'user' } }] },
+        endCall('not_booked', 'Missing insurance number.'),
+      ],
+      receptionist: RIVERSIDE_OFFER,
+    });
+
+    const outcome = await h.run();
+
+    const [result] = toolResults(h.llm.calls[2]);
+    expect(result.is_error).toBe(true);
+    expect(String(result.content)).toContain('insuranceNumber');
+    expect(outcome.status).toBe('not_booked');
+  });
+
+  // ─── R12: live line events ─────────────────────────────────────────────────────
+
+  it('emits hold start before the hold sleep completes, hold end after', async () => {
+    let releaseSleep!: () => void;
+    let sleepStarted!: () => void;
+    const sleeping = new Promise<void>(r => (sleepStarted = r));
+    const sleep = () =>
+      new Promise<void>(resolve => {
+        releaseSleep = resolve;
+        sleepStarted();
+      });
+    const h = setup({ clinicId: 'bright-smile', caller: [PRESS_1, endCall('not_booked', 'Done.')], sleep });
+
+    const done = h.run();
+    await sleeping;
+    await new Promise(r => setTimeout(r, 0));
+
+    // Mid-hold: start emitted live, no end yet, greeting not spoken yet
+    const holdsMid = ofType(h.io.emitted, 'hold');
+    expect(holdsMid).toEqual([{ type: 'hold', state: 'start', seconds: 8 }]);
+    expect(ofType(h.io.emitted, 'call_status').map(s => s.phase)).toContain('hold');
+    expect(h.io.spoken.some(s => s.speaker === 'receptionist')).toBe(false);
+
+    releaseSleep();
+    const outcome = await done;
+
+    expect(ofType(h.io.emitted, 'hold')).toEqual([
+      { type: 'hold', state: 'start', seconds: 8 },
+      { type: 'hold', state: 'end' },
+    ]);
+    expect(h.io.spoken.find(s => s.speaker === 'receptionist')?.text).toBe(
+      'Bright Smile Dental, Sarah speaking, how can I help?',
+    );
+    // The agent still hears the full batch, in order
+    const heard = String(toolResults(h.llm.calls[1])[0].content);
+    expect(heard.indexOf('[On hold for 8 seconds]')).toBeLessThan(heard.indexOf('Sarah speaking'));
+    expect(outcome.status).toBe('not_booked');
   });
 });
