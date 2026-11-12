@@ -6,10 +6,6 @@ Built for the Hiya Voice AI Challenge, Productivity track.
 
 ---
 
-![screenshot — will be replaced with a GIF before submission](docs/screenshot-placeholder.png)
-
----
-
 ## Prerequisites
 
 | Requirement | Notes |
