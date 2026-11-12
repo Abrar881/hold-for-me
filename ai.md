@@ -58,24 +58,29 @@ In this mode the receptionist-to-caller path skips STT — text is passed direct
 
 ## My contribution
 
-I directed this project; Claude Code wrote the code. Being direct about the split:
+I acted as product owner and technical lead. I set the direction, made the product and architecture decisions, and ran the build process. Claude Code did the implementation under that direction.
 
-**Decisions I made**
-- Picked the **Productivity** track and the problem: phoning a dentist or optician to book an appointment. It's a task that only works by voice, it lands during working hours, and it sits right in Hiya's domain of phone calls.
-- Chose a **simulated phone line** over real Twilio calls so judges can run it locally with one API key and the demo stays predictable. Real telephony is the next step, behind the `PhoneLine` interface.
-- Chose the speech architecture: a server pipeline (Claude as the brain, OpenAI speech-to-text and text-to-speech), falling back automatically to browser voices. It runs with one key and sounds natural with two.
-- Approved the design spec and implementation plan before any code was written. I then asked for the build to run as parallel subagents with a review after each task, to move faster.
-- Decided to ship without live API test runs under time pressure, and to say so openly (see README → Known limitations).
+**Product decisions**
+- **Chose the problem.** I picked the Productivity track and narrowed it to one concrete, everyday task: phoning a dentist or optician to book an appointment. That call can only be made by voice, it falls inside working hours, and it sits in Hiya's own domain of phone calls.
+- **Defined the experience.** You state a request in a few seconds. The agent handles the phone menu, the hold and the receptionist, and checks back with you by voice only when a decision is genuinely yours.
+- **Scoped for judges.** I chose a simulated phone line over real telephony so the project runs locally with a single API key and the demo is reliable. Real calls are the planned next step behind the `PhoneLine` interface.
 
-**What AI did**
-- Claude Code proposed the design options, wrote the spec and plan, and implemented every task with tests.
-- A separate reviewer agent checked each task. Those reviews caught real bugs that were then fixed, for example:
-  - the agent could get my approval for a slot the clinic hadn't offered yet;
-  - "okay, what time was it?" was being read as a "yes";
-  - the check-in microphone opened before the question had played;
-  - hold music never started.
+**Architecture decisions**
+- **Speech pipeline.** Claude handles reasoning and OpenAI handles speech-to-text and text-to-speech, with automatic fallback to browser voices. The app works with one key and sounds natural with two.
+- **Language.** TypeScript end to end, so server and client share types.
 
-**What I can explain**
-- The product reasoning and why voice is the right interface.
-- The guardrail design: approvals and bookings are enforced in code (the offer gate, and the slot book as the source of truth), not just in prompts.
-- The trade-offs in the architecture.
+**Process**
+- I reviewed and approved the design spec and the implementation plan before any code was written.
+- I chose subagent-driven development: each task was built by one agent and checked by an independent reviewer agent. I then had independent tasks run in parallel to speed up delivery.
+- That review process caught and fixed real issues before merge, including:
+  - an approval being accepted for a slot the clinic hadn't offered yet;
+  - "okay, what time was it?" being read as agreement;
+  - the check-in microphone opening before the question had played.
+
+**What I can walk through in an interview**
+- The product reasoning, and why voice is the right interface for each key moment.
+- The guardrail design. Approvals and bookings are enforced in code, not trusted to prompts:
+  - the offer gate;
+  - approvals tied to real offers;
+  - the slot book as the single source of truth.
+- The architecture trade-offs and the roadmap.
