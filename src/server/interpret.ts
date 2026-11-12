@@ -23,6 +23,19 @@ type Decision = z.infer<typeof DecisionSchema>;
 const YES_RE = /^(yes|yeah|yep|sure|ok(ay)?|fine|that'?s fine|go ahead|book it)\b/i;
 const NO_RE = /^(no|nope|don'?t|not)\b/i;
 
+/** Anything after the yes-word that makes a "yes" ambiguous ("sure, but which day?"). */
+const AMBIGUOUS_AFTER_YES_RE = /\b(but|actually|wait|no|not|which|what|when|why|how|hold on)\b/i;
+
+/**
+ * Fast-path yes: a leading yes-word, no question mark anywhere, and nothing
+ * ambiguous after the yes-word. Everything else goes to the LLM.
+ */
+function isFastYes(answer: string): boolean {
+  const m = YES_RE.exec(answer);
+  if (!m || answer.includes('?')) return false;
+  return !AMBIGUOUS_AFTER_YES_RE.test(answer.slice(m[0].length));
+}
+
 /** Words that carry no information beyond agreement ("yes please", "ok, go ahead"). */
 const AGREEMENT_WORDS_RE =
   /\b(yes|yeah|yep|sure|ok(ay)?|fine|that'?s fine|go ahead|book it|please|thanks|thank you)\b/gi;
@@ -55,6 +68,7 @@ export async function interpretAnswer(
   answer: string,
   question: string,
   llm: LlmCall,
+  signal?: AbortSignal,
 ): Promise<{ decision: 'yes' | 'no' | 'unclear'; note: string }> {
   const trimmed = answer.trim();
 
@@ -64,7 +78,7 @@ export async function interpretAnswer(
   }
 
   // Yes fast path
-  if (YES_RE.test(trimmed)) {
+  if (isFastYes(trimmed)) {
     return { decision: 'yes', note: trimmed };
   }
 
@@ -74,7 +88,7 @@ export async function interpretAnswer(
   }
 
   // Ambiguous — ask the LLM
-  return callLlm(answer, question, llm);
+  return callLlm(answer, question, llm, signal);
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +99,7 @@ async function callLlm(
   answer: string,
   question: string,
   llm: LlmCall,
+  signal?: AbortSignal,
 ): Promise<{ decision: 'yes' | 'no' | 'unclear'; note: string }> {
   const outputFormat = zodOutputFormat(DecisionSchema);
 
@@ -122,7 +137,7 @@ async function callLlm(
   };
 
   try {
-    const msg = await llm(params);
+    const msg = await llm(params, signal);
 
     // Global constraint: check stop_reason before reading content
     if (msg.stop_reason === 'refusal') {

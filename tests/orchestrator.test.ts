@@ -207,11 +207,13 @@ describe('runCall', () => {
     const statuses = ofType(h.io.emitted, 'call_status').map(s => s.phase);
     expect(statuses).toContain('paused');
     expect(statuses.slice(statuses.indexOf('paused'))).toEqual(['paused', 'talking', 'ended']);
+    // The real offer is appended to what the user hears and approves
+    const spokenQuestion = `${question} (Thursday 19 November, 3:00pm)`;
     expect(ofType(h.io.emitted, 'needs_user')).toEqual([
-      { type: 'needs_user', question, timeoutMs: 15000, attempt: 1 },
+      { type: 'needs_user', question: spokenQuestion, timeoutMs: 15000, attempt: 1 },
     ]);
-    expect(h.io.spoken.find(s => s.channel === 'user')?.text).toBe(question);
-    expect(h.io.asked).toEqual([{ question, timeoutMs: 15000, attempt: 1 }]);
+    expect(h.io.spoken.find(s => s.channel === 'user')?.text).toBe(spokenQuestion);
+    expect(h.io.asked).toEqual([{ question: spokenQuestion, timeoutMs: 15000, attempt: 1 }]);
 
     // call_ended carries an .ics for the slot-book booking
     const [ended] = ofType(h.io.emitted, 'call_ended');
@@ -516,6 +518,7 @@ describe('runCall', () => {
       { field: 'insuranceNumber', text: 'yes, and my insurance number is RX-1234' },
     ]);
     expect(h.state.approvals).toEqual([{ offerId: 'off-1', kinds: ['fee'] }]);
+    expect(h.io.asked[0].question).toBe(`${question} (Wednesday 18 November, 10:00am, £20 fee)`);
     const results = toolResults(h.llm.calls[3]);
     expect(results.map(r => r.is_error ?? false)).toEqual([false, false]);
     expect(outcome.status).toBe('booked');
@@ -580,6 +583,59 @@ describe('runCall', () => {
     expect(JSON.parse(String(toolResults(h.llm.calls[2])[0].content))).toMatchObject({ decision: 'no' });
     expect(h.state.userAnswers.some(a => a.field !== undefined)).toBe(false);
     expect(toolResults(h.llm.calls[3])[0].is_error).toBe(true);
+  });
+
+  it('info request answered with a question back re-asks, then records the real answer', async () => {
+    const h = infoFlow(['which number do you mean?', 'AB123456']);
+
+    await h.run();
+
+    expect(h.io.asked.map(a => a.attempt)).toEqual([1, 2]);
+    expect(h.state.userAnswers).toEqual([{ field: 'insuranceNumber', text: 'AB123456' }]);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBeFalsy();
+  });
+
+  it('info request answered "I don\'t know" / "no idea" is unclear: not recorded, then no answer', async () => {
+    const h = infoFlow(["I don't know", 'no idea, sorry']);
+
+    await h.run();
+
+    expect(h.io.asked.map(a => a.attempt)).toEqual([1, 2]);
+    expect(toolResults(h.llm.calls[2])[0].content).toBe(NO_ANSWER);
+    expect(h.state.userAnswers).toEqual([]);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBe(true);
+  });
+
+  // ─── Review fix: approvals only for received offers ────────────────────────────
+
+  it('ask_user approval for an offer not yet received is an error; the later offer is still gated', async () => {
+    const h = setup({
+      caller: [
+        PRESS_1,
+        // No offer exists yet: off-1 is only a guess at the next id
+        { tools: [{ name: 'ask_user', input: { question: 'Is any afternoon OK?', offerId: 'off-1', approvalFor: ['slot'] } }] },
+        INTRO,
+        acceptOffer('off-1'),
+        endCall('not_booked', 'Only 3pm was available.'),
+      ],
+      receptionist: OFFER_THU_3PM,
+      answers: ['yes'],
+    });
+
+    const outcome = await h.run();
+
+    const [askResult] = toolResults(h.llm.calls[2]);
+    expect(askResult.is_error).toBe(true);
+    expect(askResult.content).toBe('unknown offerId; only ask about an offer you have received');
+    expect(h.io.asked).toHaveLength(0);
+    expect(h.state.approvals).toEqual([]);
+    // off-1 now exists (Thu 3pm, outside the window) and is still rejected
+    expect(h.state.offers.has('off-1')).toBe(true);
+    const [acceptResult] = toolResults(h.llm.calls[4]);
+    expect(acceptResult.is_error).toBe(true);
+    expect(String(acceptResult.content)).toContain('outside_time_window');
+    expect(outcome.status).toBe('not_booked');
+    expect(h.line.slotBook().booked()).toBeUndefined();
   });
 
   it('info request with timeout then empty answer re-asks once, then reports no answer', async () => {

@@ -18,6 +18,7 @@ import { callerSystemPrompt } from './agents/prompts.js';
 import { hasContentBeyondYes, interpretAnswer, isClearNo } from './interpret.js';
 import { evaluateOffer } from './gate.js';
 import { toIcs } from './calendar.js';
+import { describeOfferForAgent, describeOfferForUser } from './orchestrator/offerText.js';
 
 export type { SpeechProvider };
 
@@ -51,8 +52,10 @@ export const MAX_CHECKIN_ATTEMPTS = 2;
 export const GOODBYE_LINE = "I'm sorry, I'll have to call back later. Goodbye.";
 export const NO_ANSWER_RESULT = "No answer from user. Decline politely and say you'll call back.";
 export const BOOKING_MISMATCH_NOTE = '(agent reported booked but clinic has no booking)';
+export const UNKNOWN_OFFER_RESULT = 'unknown offerId; only ask about an offer you have received';
 
 const SILENCE = '(silence)';
+const UNSURE_RE = /don'?t know|not sure|no idea/i;
 const NUDGE = 'Please continue using your tools. Call end_call when the call is complete.';
 const REFUSAL_SUMMARY =
   "Sorry, the assistant couldn't continue this call, so it was ended. Please try again or call the clinic directly.";
@@ -81,12 +84,6 @@ function localToday(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function describeOffer(o: Offer): string {
-  const fee = o.conditions.feeGbp ? `, fee £${o.conditions.feeGbp}` : '';
-  const info = o.conditions.requiredInfo?.length ? `, requires: ${o.conditions.requiredInfo.join(', ')}` : '';
-  return `[Structured offer ${o.offerId}: ${o.start} to ${o.end}${fee}${info}]`;
 }
 
 class Call {
@@ -183,7 +180,7 @@ class Call {
         case 'wait':
           return { content: SILENCE };
         case 'ask_user':
-          return { content: await this.handleAskUser(input) };
+          return await this.handleAskUser(input);
         default: {
           const r = execLocal(name, input, this.state, this.deps.line.slotBook());
           if (!r) return { content: `Unhandled tool: ${name}`, isError: true };
@@ -197,11 +194,19 @@ class Call {
     }
   }
 
-  private async handleAskUser(input: Record<string, unknown>): Promise<string> {
-    const question = String(input['question'] ?? '');
+  private async handleAskUser(input: Record<string, unknown>): Promise<ToolOutput> {
     const offerId = typeof input['offerId'] === 'string' ? input['offerId'] : undefined;
     const approvalFor = Array.isArray(input['approvalFor']) ? (input['approvalFor'] as ApprovalKind[]) : [];
     const field = typeof input['field'] === 'string' && input['field'] ? input['field'] : undefined;
+
+    // Approvals bind to an offer the caller has actually received. Offer ids are
+    // predictable (off-N), so a premature "yes" must never authorise a future offer.
+    const offer = offerId !== undefined ? this.state.offers.get(offerId) : undefined;
+    if (approvalFor.length > 0 && !offer) return { content: UNKNOWN_OFFER_RESULT, isError: true };
+    // The user approves the real slot and fee, not just the agent's paraphrase of it.
+    const asked = String(input['question'] ?? '');
+    const question = offer && approvalFor.length > 0 ? `${asked} ${describeOfferForUser(offer)}` : asked;
+
     const resumePhase = this.phase ?? 'talking';
     this.setPhase('paused');
     try {
@@ -215,9 +220,9 @@ class Call {
           field !== undefined && approvalFor.length === 0
             ? this.recordInfo(field, answer)
             : await this.recordDecision(answer, question, offerId, approvalFor, field);
-        if (result !== undefined) return result;
+        if (result !== undefined) return { content: result };
       }
-      return NO_ANSWER_RESULT;
+      return { content: NO_ANSWER_RESULT };
     } finally {
       this.setPhase(resumePhase);
     }
@@ -226,9 +231,13 @@ class Call {
   /**
    * Info request (field, no approvalFor): any non-empty answer that is not a
    * clear "no" IS the info, so a bare "AB123456" counts without needing a yes.
+   * A question back ("…?") or "don't know / not sure / no idea" is unclear:
+   * nothing is recorded and the user is re-asked (undefined).
    */
-  private recordInfo(field: string, answer: string): string {
-    if (isClearNo(answer)) {
+  private recordInfo(field: string, answer: string): string | undefined {
+    const text = answer.trim();
+    if (text.endsWith('?') || UNSURE_RE.test(text)) return undefined;
+    if (isClearNo(text)) {
       this.state.userAnswers.push({ text: answer });
       return JSON.stringify({ decision: 'no', userSaid: answer });
     }
@@ -249,12 +258,12 @@ class Call {
     approvalFor: ApprovalKind[],
     field: string | undefined,
   ): Promise<string | undefined> {
-    const { decision } = await interpretAnswer(answer, question, this.deps.interpretLlm);
+    const { decision } = await interpretAnswer(answer, question, this.deps.interpretLlm, this.signal);
     this.checkAbort();
     const suppliesField = field !== undefined && decision === 'yes' && hasContentBeyondYes(answer);
     this.state.userAnswers.push(suppliesField ? { field, text: answer } : { text: answer });
     if (decision === 'unclear') return undefined;
-    if (decision === 'yes' && offerId && approvalFor.length > 0) {
+    if (decision === 'yes' && approvalFor.length > 0 && offerId !== undefined && this.state.offers.has(offerId)) {
       this.state.approvals.push({ offerId, kinds: approvalFor });
     }
     return JSON.stringify({ decision, userSaid: answer });
@@ -311,7 +320,7 @@ class Call {
     this.state.offers.set(offer.offerId, offer);
     const gate = evaluateOffer(offer, this.state.request, this.state.calendar, this.state.approvals);
     this.deps.io.emit({ type: 'offer', offer, gate });
-    return describeOffer(offer);
+    return describeOfferForAgent(offer);
   }
 
   private endHold(): void {
