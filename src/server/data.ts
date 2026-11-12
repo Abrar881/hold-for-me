@@ -10,7 +10,7 @@ import { z } from 'zod';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { resolveRel } from './dates.js';
-import type { CalendarEvent, Slot } from '../shared/types.js';
+import type { CalendarEvent, Slot, Booking } from '../shared/types.js';
 
 // ─── Exported types ────────────────────────────────────────────────────────────
 
@@ -157,11 +157,22 @@ export function loadCalendar(dir: string, today: string): CalendarEvent[] {
   const filePath = path.join(dir, 'calendar.json');
   const raw = readJson(filePath) as unknown[];
   const entries = z.array(RawCalendarEventSchema).parse(raw);
-  return entries.map(e => {
+  const events: CalendarEvent[] = entries.map(e => {
     const start = resolveRel(e.start, today);
     const end = addMinutes(start, e.durationMin);
     return { title: e.title, start, end };
   });
+
+  // Merge bookings written by appendBooking, if the file exists
+  const bookingsPath = path.join(dir, 'calendar.bookings.json');
+  if (fs.existsSync(bookingsPath)) {
+    const bookingsRaw = readJson(bookingsPath) as Booking[];
+    for (const b of bookingsRaw) {
+      events.push({ title: `${b.clinicName} appointment`, start: b.start, end: b.end });
+    }
+  }
+
+  return events;
 }
 
 /**
