@@ -1,0 +1,36 @@
+{
+  "id": "bright-smile",
+  "name": "Bright Smile Dental",
+  "service": "dental",
+  "receptionistName": "Sarah",
+  "persona": "Warm and efficient dental receptionist. Confirms patient name and date of birth before booking.",
+  "holdSeconds": 8,
+  "ivr": [
+    {
+      "id": "root",
+      "prompt": "Thanks for calling Bright Smile Dental. For appointments press 1, for billing press 2.",
+      "options": { "1": "hold-node", "2": "billing" }
+    },
+    {
+      "id": "hold-node",
+      "prompt": "",
+      "options": {},
+      "terminal": "hold"
+    },
+    {
+      "id": "billing",
+      "prompt": "",
+      "options": {},
+      "terminal": "closed"
+    }
+  ],
+  "slots": [
+    { "slotId": "bs-1", "rel": { "weekOffset": 1, "weekday": 2, "time": "09:00" }, "durationMin": 30 },
+    { "slotId": "bs-2", "rel": { "weekOffset": 1, "weekday": 4, "time": "10:30" }, "durationMin": 30 },
+    { "slotId": "bs-3", "rel": { "weekOffset": 1, "weekday": 5, "time": "11:00" }, "durationMin": 30 }
+  ],
+  "quirks": {
+    "asksDob": true
+  },
+  "demoRequest": "Book me a check-up at Bright Smile next week, mornings, not Wednesday."
+}

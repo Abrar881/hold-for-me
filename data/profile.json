@@ -1,0 +1,9 @@
+{
+  "name": "Alex Khan",
+  "dob": "1998-04-03",
+  "phone": "07700 900123",
+  "existingPatientAt": ["bright-smile", "clearview"],
+  "fields": {
+    "address": "12 Elm Road, Leeds"
+  }
+}

@@ -1,0 +1,7 @@
+[
+  {
+    "title": "Team stand-up",
+    "start": { "weekOffset": 1, "weekday": 2, "time": "09:00" },
+    "durationMin": 60
+  }
+]

@@ -1,0 +1,33 @@
+{
+  "id": "clearview",
+  "name": "Clearview Opticians",
+  "service": "optical",
+  "receptionistName": "Priya",
+  "persona": "Friendly and professional optician's receptionist. Offers the first available slot and is flexible with timing.",
+  "holdSeconds": 5,
+  "ivr": [
+    {
+      "id": "root",
+      "prompt": "Clearview Opticians. To book an eye test press 1, for collections press 2.",
+      "options": { "1": "eye-test", "2": "collections" }
+    },
+    {
+      "id": "eye-test",
+      "prompt": "",
+      "options": {},
+      "terminal": "receptionist"
+    },
+    {
+      "id": "collections",
+      "prompt": "",
+      "options": {},
+      "terminal": "closed"
+    }
+  ],
+  "slots": [
+    { "slotId": "cv-1", "rel": { "weekOffset": 1, "weekday": 4, "time": "15:00" }, "durationMin": 30 },
+    { "slotId": "cv-2", "rel": { "weekOffset": 2, "weekday": 1, "time": "09:30" }, "durationMin": 30 }
+  ],
+  "quirks": {},
+  "demoRequest": "Get me an eye test at Clearview next week, mornings please."
+}

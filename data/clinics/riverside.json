@@ -1,0 +1,25 @@
+{
+  "id": "riverside",
+  "name": "Riverside Dental",
+  "service": "dental",
+  "receptionistName": "Tom",
+  "persona": "Thorough new-patient coordinator. Collects insurance details before confirming registration.",
+  "holdSeconds": 3,
+  "ivr": [
+    {
+      "id": "root",
+      "prompt": "Riverside Dental, connecting you now.",
+      "options": {},
+      "terminal": "receptionist"
+    }
+  ],
+  "slots": [
+    { "slotId": "rv-1", "rel": { "weekOffset": 1, "weekday": 3, "time": "10:00" }, "durationMin": 30 },
+    { "slotId": "rv-2", "rel": { "weekOffset": 1, "weekday": 5, "time": "09:30" }, "durationMin": 30 }
+  ],
+  "quirks": {
+    "newPatientFeeGbp": 20,
+    "requiresInfoForNewPatients": ["insuranceNumber"]
+  },
+  "demoRequest": "Register me at Riverside Dental and book a check-up next week, any morning."
+}
