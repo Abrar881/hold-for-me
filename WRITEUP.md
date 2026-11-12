@@ -6,7 +6,20 @@
 
 Hold For Me is a voice agent that phones a clinic on your behalf. You say "book me a check-up at Bright Smile next week, mornings, not Wednesday" — the agent navigates the phone menu, waits on hold, holds a full conversation with the receptionist, and books the appointment. It checks back with you by voice only when a decision needs your approval, then returns a confirmed booking with a transcript and calendar file.
 
-The demo runs locally across four scripted scenarios: a happy path with a calendar clash, a mid-call check-in, guardrails under pressure (a fee and a missing data field), and a graceful failure when the clinic is closed.
+The demo runs locally across four scripted scenarios:
+- a happy path with a calendar clash;
+- a mid-call check-in;
+- guardrails under pressure (a fee and a missing data field);
+- a graceful failure when the clinic is closed.
+
+## Key decisions
+
+I chose this problem because it is one of the few everyday tasks that still *only* works by voice. It also sits squarely in Hiya's world of phone calls.
+
+I made three design calls:
+- **A simulated phone line.** It has a deterministic phone menu, real hold time, and a Claude-powered receptionist working from a scripted diary. Judges can run it with one API key, and the demo behaves the same every time.
+- **A layered speech architecture.** Claude does the reasoning and OpenAI provides natural voices, with automatic fallback to browser speech. It works with one key and sounds best with two.
+- **Guardrails enforced in code, not in prompts.** An agent that books things for you has to be trustworthy by construction.
 
 ## Who it's for
 
@@ -24,7 +37,11 @@ The third is the mid-call check-in. When the receptionist offers a slot outside 
 
 ## Guardrails enforced in code
 
-The agent's trustworthiness is not left to prompt-writing. At the start of every call the orchestrator checks the agent's first utterance for the AI disclosure phrase before the receptionist receives a word. Offers are structured events: a synchronous gate validates every slot against the user's rules (date range, time window, excluded days, calendar clashes) before `accept_offer` can proceed. Any offer with a fee or a data request is blocked until the user approves it by voice. The slot book, not the agent's confirmation, is the source of truth for the result card.
+The agent's trustworthiness is not left to prompt-writing:
+- **AI disclosure.** Every call opens by saying it's an AI assistant. If the agent's first line leaves that out, the orchestrator adds it.
+- **The offer gate.** Offers are structured events, and a gate checks every slot against the user's rules (date range, time window, excluded days, calendar clashes) before `accept_offer` can proceed.
+- **Approvals.** Fees and out-of-rules slots need the user's spoken approval. That approval is tied to the specific offer the user actually heard, and an ambiguous reply like "okay, what time was it?" never counts as a yes.
+- **Source of truth.** The clinic's slot book decides what goes on the result card, not the agent's claim that it booked something.
 
 ## What comes next
 
