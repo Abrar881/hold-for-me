@@ -58,4 +58,24 @@ In this mode the receptionist-to-caller path skips STT — text is passed direct
 
 ## My contribution
 
-*Replace this paragraph with an honest account in your own words before submitting. Describe: which parts of the spec or plan you read carefully and agreed or disagreed with; which design decisions you made yourself or changed; which code you wrote, reviewed line-by-line, or rewrote; and what you would explain confidently in an interview. Judges read ai.md alongside the code — a vague placeholder here raises questions.*
+I directed this project; Claude Code wrote the code. Being direct about the split:
+
+**Decisions I made**
+- Picked the **Productivity** track and the problem: phoning a dentist or optician to book an appointment. It's a task that only works by voice, it lands during working hours, and it sits right in Hiya's domain of phone calls.
+- Chose a **simulated phone line** over real Twilio calls so judges can run it locally with one API key and the demo stays predictable. Real telephony is the next step, behind the `PhoneLine` interface.
+- Chose the speech architecture: a server pipeline (Claude as the brain, OpenAI speech-to-text and text-to-speech), falling back automatically to browser voices. It runs with one key and sounds natural with two.
+- Approved the design spec and implementation plan before any code was written. I then asked for the build to run as parallel subagents with a review after each task, to move faster.
+- Decided to ship without live API test runs under time pressure, and to say so openly (see README → Known limitations).
+
+**What AI did**
+- Claude Code proposed the design options, wrote the spec and plan, and implemented every task with tests.
+- A separate reviewer agent checked each task. Those reviews caught real bugs that were then fixed, for example:
+  - the agent could get my approval for a slot the clinic hadn't offered yet;
+  - "okay, what time was it?" was being read as a "yes";
+  - the check-in microphone opened before the question had played;
+  - hold music never started.
+
+**What I can explain**
+- The product reasoning and why voice is the right interface.
+- The guardrail design: approvals and bookings are enforced in code (the offer gate, and the slot book as the source of truth), not just in prompts.
+- The trade-offs in the architecture.
