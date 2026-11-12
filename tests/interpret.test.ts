@@ -44,4 +44,11 @@ describe('interpretAnswer', () => {
     expect(result.decision).toBe('unclear');
     expect(result.decision).not.toBe('yes');
   });
+
+  it('llm returns refusal stop → unclear (never yes)', async () => {
+    const llm = fakeLlm([{ stop: 'refusal' }]);
+    const result = await interpretAnswer('hmm well maybe', QUESTION, llm);
+    expect(result.decision).toBe('unclear');
+    expect(result.decision).not.toBe('yes');
+  });
 });

@@ -107,6 +107,11 @@ async function callLlm(
   try {
     const msg = await llm(params);
 
+    // Global constraint: check stop_reason before reading content
+    if (msg.stop_reason === 'refusal') {
+      return { decision: 'unclear', note: answer };
+    }
+
     // Extract text from the first text block
     const textBlock = msg.content.find(
       (b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text',
