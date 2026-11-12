@@ -3,6 +3,7 @@ import type { ClientMsg } from '../../shared/protocol.js';
 import type { SocketState } from '../ws.js';
 import type { Capabilities } from '../capabilities.js';
 import { startListening } from '../browserSpeech.js';
+import { Recorder } from '../recorder.js';
 
 interface Props {
   state: SocketState;
@@ -26,21 +27,97 @@ export function RequestPanel({ state, capabilities, send }: Props) {
   const [textInput, setTextInput] = useState('');
   const [selectedScenario, setSelectedScenario] = useState('');
   const stopRef = useRef<(() => void) | null>(null);
+  const recorderRef = useRef<Recorder | null>(null);
+
+  // Keep refs current so the stable spacebar effect closure can read them.
+  const canSpeakRef = useRef(capabilities.recognition && capabilities.mic);
+  canSpeakRef.current = capabilities.recognition && capabilities.mic;
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  const phaseRef = useRef(state.phase);
+  phaseRef.current = state.phase;
+  const speechModeRef = useRef(state.speechMode);
+  speechModeRef.current = state.speechMode;
 
   const canSpeak = capabilities.recognition && capabilities.mic;
   const isUnderstanding = state.phase === 'understanding';
 
-  // Spacebar PTT
+  const startRecording = useCallback(() => {
+    if (recordingRef.current) return;
+    setRecording(true);
+    setInterim('');
+    setFinalText('');
+
+    if (speechModeRef.current === 'openai') {
+      const rec = new Recorder();
+      recorderRef.current = rec;
+      // PTT mode: autoStop false — user releases button/key to stop
+      rec.start({ autoStop: false, maxMs: 60000 })
+        .then(blob => {
+          recorderRef.current = null;
+          setRecording(false);
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result as string;
+            const base64 = dataUrl.split(',')[1];
+            send({ type: 'user_utterance', audioB64: base64, mime: blob.type });
+          };
+          reader.readAsDataURL(blob);
+        })
+        .catch(() => {
+          recorderRef.current = null;
+          setRecording(false);
+        });
+    } else {
+      try {
+        stopRef.current = startListening(
+          (result) => {
+            setInterim(result.text);
+            if (result.final) setFinalText(result.text);
+          },
+          () => {
+            setRecording(false);
+          },
+        );
+      } catch {
+        setRecording(false);
+      }
+    }
+  }, [send]);
+
+  const stopRecording = useCallback(() => {
+    if (speechModeRef.current === 'openai') {
+      recorderRef.current?.stop();
+      recorderRef.current = null;
+      // The blob is sent inside the .then() callback above
+    } else {
+      if (stopRef.current) {
+        stopRef.current();
+        stopRef.current = null;
+      }
+      setRecording(false);
+      if (interim) {
+        send({ type: 'user_utterance', text: interim });
+        setInterim('');
+      }
+    }
+  }, [send, interim]);
+
+  // Spacebar PTT — stable effect with [] deps; reads live values via refs.
   useEffect(() => {
-    if (!canSpeak) return;
     const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !recording && state.phase === 'idle' && !isUnderstanding) {
+      if (
+        e.code === 'Space' &&
+        !recordingRef.current &&
+        phaseRef.current === 'idle' &&
+        canSpeakRef.current
+      ) {
         e.preventDefault();
         startRecording();
       }
     };
     const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && recording) {
+      if (e.code === 'Space' && recordingRef.current) {
         e.preventDefault();
         stopRecording();
       }
@@ -51,39 +128,7 @@ export function RequestPanel({ state, capabilities, send }: Props) {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
     };
-  });
-
-  function startRecording() {
-    if (recording) return;
-    setRecording(true);
-    setInterim('');
-    setFinalText('');
-    try {
-      stopRef.current = startListening(
-        (result) => {
-          setInterim(result.text);
-          if (result.final) setFinalText(result.text);
-        },
-        () => {
-          setRecording(false);
-        },
-      );
-    } catch {
-      setRecording(false);
-    }
-  }
-
-  function stopRecording() {
-    if (stopRef.current) {
-      stopRef.current();
-      stopRef.current = null;
-    }
-    setRecording(false);
-    if (interim) {
-      send({ type: 'user_utterance', text: interim });
-      setInterim('');
-    }
-  }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleScenarioChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const id = e.target.value;

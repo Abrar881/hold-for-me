@@ -189,10 +189,12 @@ export function App() {
         {/* Check-in — overlaid when agent needs a decision */}
         {state.phase === 'checkin' && state.pendingQuestion && (
           <CheckIn
+            key={state.pendingQuestion.attempt}
             question={state.pendingQuestion.question}
             timeoutMs={state.pendingQuestion.timeoutMs}
             capabilities={capabilities}
             readyToListen={readyToListen}
+            speechMode={state.speechMode}
             send={send}
           />
         )}
