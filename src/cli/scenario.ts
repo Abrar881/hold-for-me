@@ -75,12 +75,14 @@ interface ExpectedOutcome {
   time?: string;
   /** If true, the scenario must NOT trigger a needs_user event. */
   noNeedsUser?: boolean;
+  /** If true, the scenario MUST trigger at least one needs_user event. */
+  requiresNeedsUser?: boolean;
 }
 
 const EXPECTED: Record<string, ExpectedOutcome> = {
   'bright-smile': { status: 'booked', time: '10:30', noNeedsUser: true },
   'clearview': { status: 'booked', time: '15:00' },
-  'riverside': { status: 'booked' },
+  'riverside': { status: 'booked', requiresNeedsUser: true },
   'sunny-eyes': { status: 'not_booked' },
 };
 
@@ -106,7 +108,13 @@ export interface RunScenarioOpts {
   log?: (line: string) => void;
 }
 
-export async function runScenario(opts: RunScenarioOpts): Promise<CallOutcome> {
+export interface ScenarioResult {
+  outcome: CallOutcome;
+  /** True if at least one needs_user event was emitted during the call. */
+  needsUserFired: boolean;
+}
+
+export async function runScenario(opts: RunScenarioOpts): Promise<ScenarioResult> {
   const { clinicId, fast, llms, dataDir, today } = opts;
   const log = opts.log ?? ((line: string) => console.log(line));
   const answer = opts.answer ?? defaultAnswer(clinicId);
@@ -143,6 +151,7 @@ export async function runScenario(opts: RunScenarioOpts): Promise<CallOutcome> {
   }
 
   // ── Build CallIO ───────────────────────────────────────────────────────────
+  let needsUserFired = false;
   const io: CallIO = {
     emit(msg: ServerMsg): void {
       switch (msg.type) {
@@ -156,6 +165,7 @@ export async function runScenario(opts: RunScenarioOpts): Promise<CallOutcome> {
           log(`${C.dim}[hold] ${msg.state}${msg.state === 'start' && msg.seconds !== undefined ? ` (${msg.seconds}s)` : ''}${C.reset}`);
           break;
         case 'needs_user':
+          needsUserFired = true;
           log(colorLine('user', 'needs_user', msg.question));
           break;
         case 'call_ended':
@@ -212,7 +222,8 @@ export async function runScenario(opts: RunScenarioOpts): Promise<CallOutcome> {
   };
 
   const ac = new AbortController();
-  return runCall(state, deps, ac.signal);
+  const outcome = await runCall(state, deps, ac.signal);
+  return { outcome, needsUserFired };
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
@@ -291,7 +302,7 @@ async function main(): Promise<void> {
   for (let i = 0; i < runs; i++) {
     console.log(`\n${C.bold}=== Run ${i + 1}/${runs} ===${C.reset}`);
     try {
-      const outcome = await runScenario({
+      const { outcome, needsUserFired } = await runScenario({
         clinicId,
         answer,
         fast,
@@ -308,16 +319,24 @@ async function main(): Promise<void> {
 
       let runPassed = true;
       if (expected) {
+        const failures: string[] = [];
         if (outcome.status !== expected.status) {
-          console.log(
-            `${C.red}✗ FAIL: expected status "${expected.status}", got "${outcome.status}"${C.reset}`,
-          );
+          failures.push(`expected status "${expected.status}", got "${outcome.status}"`);
+        }
+        if (expected.time && outcome.booking && !outcome.booking.start.includes(expected.time)) {
+          failures.push(`expected booking time "${expected.time}", got "${outcome.booking.start}"`);
+        }
+        if (expected.noNeedsUser && needsUserFired) {
+          failures.push(`expected NO needs_user but one fired`);
+        }
+        if (expected.requiresNeedsUser && !needsUserFired) {
+          failures.push(`expected at least one needs_user but none fired`);
+        }
+        if (failures.length > 0) {
           runPassed = false;
-        } else if (expected.time && outcome.booking && !outcome.booking.start.includes(expected.time)) {
-          console.log(
-            `${C.red}✗ FAIL: expected booking time "${expected.time}", got "${outcome.booking.start}"${C.reset}`,
-          );
-          runPassed = false;
+          for (const f of failures) {
+            console.log(`${C.red}✗ FAIL: ${f}${C.reset}`);
+          }
         } else {
           console.log(`${C.green}✓ PASS${C.reset}`);
         }

@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { runScenario, defaultAnswer } from '../src/cli/scenario.js';
+import type { ScenarioResult } from '../src/cli/scenario.js';
 import { fakeLlm } from './helpers/fakeLlm.js';
 
 // Fixed "today" matches the one used throughout the test suite.
@@ -94,17 +95,15 @@ describe('runScenario("bright-smile")', () => {
     // Interpret LLM is not needed (no ask_user call in this scenario)
     const interpretLlm = fakeLlm([]);
 
-    // Capture log lines to check for ask_user calls
-    const lines: string[] = [];
-
-    const outcome = await runScenario({
+    const result: ScenarioResult = await runScenario({
       clinicId: 'bright-smile',
       fast: true,
       llms: { caller: callerLlm, receptionist: recLlm, intake: intakeLlm, interpret: interpretLlm },
       dataDir: 'data',
       today: TODAY,
-      log: line => lines.push(line),
     });
+
+    const { outcome, needsUserFired } = result;
 
     // Outcome must be booked
     expect(outcome.status).toBe('booked');
@@ -114,9 +113,8 @@ describe('runScenario("bright-smile")', () => {
     expect(outcome.booking!.start).toContain('10:30');
     expect(outcome.booking!.clinicId).toBe('bright-smile');
 
-    // No askUser / needs_user event must have fired
-    const hasAskUser = lines.some(l => l.includes('[askUser]') || l.includes('[needs_user]'));
-    expect(hasAskUser).toBe(false);
+    // No needs_user event must have fired (bright-smile is an existing patient, no fee/info required)
+    expect(needsUserFired).toBe(false);
 
     // Transcript should not be empty
     expect(outcome.transcript.length).toBeGreaterThan(0);
