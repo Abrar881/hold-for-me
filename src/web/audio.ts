@@ -62,8 +62,23 @@ export class Player {
   private holdGain: GainNode | null = null;
   private currentAudio: HTMLAudioElement | null = null;
   private currentUtterance: SpeechSynthesisUtterance | null = null;
+  private idleCallbacks = new Set<() => void>();
 
   constructor(private send: (msg: ClientMsg) => void) {}
+
+  /**
+   * Register a callback fired whenever the queue empties (the Player becomes idle).
+   * Returns an unsubscribe function.
+   */
+  onIdle(cb: () => void): () => void {
+    this.idleCallbacks.add(cb);
+    return () => this.idleCallbacks.delete(cb);
+  }
+
+  /** True when no items are queued and nothing is playing. */
+  get idle(): boolean {
+    return !this.busy && this.queue.length === 0;
+  }
 
   setListenIn(on: boolean): void {
     this.listenIn = on;
@@ -178,6 +193,8 @@ export class Player {
       this.send({ type: 'played', id: item.id });
     }
     this.busy = false;
+    // Notify listeners that the queue is now empty.
+    for (const cb of this.idleCallbacks) cb();
   }
 
   private async playItem(item: QueuedUtterance): Promise<void> {

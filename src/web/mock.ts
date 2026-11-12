@@ -46,6 +46,9 @@ function buildCallScript(scenarioId: string): ServerMsg[] {
     },
     { type: 'ivr_key', digits: '1' },
     { type: 'hold', state: 'start', seconds: 20 },
+    // hold end fires when the receptionist picks up — before their greeting.
+    { type: 'hold', state: 'end' },
+    { type: 'call_status', phase: 'talking' },
     {
       type: 'utterance',
       id: 'u2',
@@ -53,8 +56,6 @@ function buildCallScript(scenarioId: string): ServerMsg[] {
       text: `${clinic}, Sarah speaking. How can I help?`,
       channel: 'call',
     },
-    { type: 'hold', state: 'end' },
-    { type: 'call_status', phase: 'talking' },
     {
       type: 'utterance',
       id: 'u3',

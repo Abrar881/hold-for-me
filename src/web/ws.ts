@@ -107,7 +107,9 @@ function reducer(state: SocketState, action: Action): SocketState {
         case 'hold': {
           const holdSeconds =
             msg.state === 'start' ? (msg.seconds ?? 0) : state.holdSeconds;
-          return { ...state, holdSeconds };
+          // Drive callPhase directly from hold events so hold music triggers.
+          const callPhase = msg.state === 'start' ? 'hold' : 'talking';
+          return { ...state, holdSeconds, callPhase };
         }
         case 'needs_user':
           return {

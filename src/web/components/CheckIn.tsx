@@ -2,15 +2,18 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ClientMsg } from '../../shared/protocol.js';
 import type { Capabilities } from '../capabilities.js';
 import { startListening } from '../browserSpeech.js';
+import { shouldStartListening } from '../checkinGating.js';
 
 interface Props {
   question: string;
   timeoutMs: number;
   capabilities: Capabilities;
+  /** True once the Player has finished playing everything queued before this check-in. */
+  readyToListen: boolean;
   send: (m: ClientMsg) => void;
 }
 
-export function CheckIn({ question, timeoutMs, capabilities, send }: Props) {
+export function CheckIn({ question, timeoutMs, capabilities, readyToListen, send }: Props) {
   const [remaining, setRemaining] = useState(Math.round(timeoutMs / 1000));
   const [interim, setInterim] = useState('');
   const [finalText, setFinalText] = useState('');
@@ -27,9 +30,10 @@ export function CheckIn({ question, timeoutMs, capabilities, send }: Props) {
     send({ type: 'user_utterance', text });
   }, [send]);
 
-  // Auto-start listening if speech is available
+  // Auto-start listening only once the Player has finished playing queued audio.
+  // Uses the pure shouldStartListening gate to avoid starting during TTS.
   useEffect(() => {
-    if (!canSpeak) return;
+    if (!shouldStartListening(readyToListen, canSpeak, sentRef.current)) return;
     setListening(true);
     try {
       stopRef.current = startListening(
@@ -48,7 +52,7 @@ export function CheckIn({ question, timeoutMs, capabilities, send }: Props) {
     return () => {
       stopRef.current?.();
     };
-  }, [canSpeak, submitText]);
+  }, [readyToListen, canSpeak, submitText]);
 
   // Countdown
   useEffect(() => {
@@ -103,7 +107,9 @@ export function CheckIn({ question, timeoutMs, capabilities, send }: Props) {
           </svg>
           {listening
             ? <span>Listening… {remaining}s</span>
-            : <span>{remaining}s to respond</span>
+            : readyToListen
+              ? <span>{remaining}s to respond</span>
+              : <span>Waiting for question to finish…</span>
           }
         </div>
 

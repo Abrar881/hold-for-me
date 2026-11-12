@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSocket } from './ws.js';
 import { detectCapabilities } from './capabilities.js';
 import { Player } from './audio.js';
@@ -27,10 +27,16 @@ const AlertIcon = () => (
 export function App() {
   const { state, send } = useSocket();
   const playerRef = useRef<Player | null>(null);
+  // playerIdle tracks whether the Player's queue is empty.
+  // CheckIn uses this to gate auto-listening until the question utterance has played.
+  const [playerIdle, setPlayerIdle] = useState(true);
 
   // Initialise the player once, with a stable send reference.
   useEffect(() => {
-    playerRef.current = new Player((msg: ClientMsg) => send(msg));
+    const player = new Player((msg: ClientMsg) => send(msg));
+    playerRef.current = player;
+    // Fire setPlayerIdle(true) whenever the queue drains.
+    return player.onIdle(() => setPlayerIdle(true));
   }, [send]);
 
   // Sync listen-in state to player.
@@ -45,6 +51,7 @@ export function App() {
     if (!player) return;
     const newLines = state.transcript.slice(prevTranscriptLen.current);
     prevTranscriptLen.current = state.transcript.length;
+    let enqueued = false;
     for (const line of newLines) {
       if (line.id) {
         player.enqueue({
@@ -56,8 +63,11 @@ export function App() {
           mime: line.mime,
           speechMode: state.speechMode,
         });
+        enqueued = true;
       }
     }
+    // Mark as not-idle as soon as work is queued; onIdle fires when done.
+    if (enqueued) setPlayerIdle(false);
   }, [state.transcript, state.speechMode]);
 
   // Handle hold music.
@@ -151,6 +161,7 @@ export function App() {
             question={state.pendingQuestion.question}
             timeoutMs={state.pendingQuestion.timeoutMs}
             capabilities={capabilities}
+            readyToListen={playerIdle}
             send={send}
           />
         )}
