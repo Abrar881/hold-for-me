@@ -541,6 +541,90 @@ describe('runCall', () => {
     expect(outcome.status).toBe('not_booked');
   });
 
+  // ─── R13: info requests count without a yes ────────────────────────────────────
+
+  const infoFlow = (answers: (string | null)[]) =>
+    setup({
+      clinicId: 'riverside',
+      caller: [
+        INTRO,
+        { tools: [{ name: 'ask_user', input: { question: "What's your insurance number?", field: 'insuranceNumber' } }] },
+        { tools: [{ name: 'provide_info', input: { offerId: 'off-1', field: 'insuranceNumber', source: 'user' } }] },
+        endCall('not_booked', 'Done.'),
+      ],
+      receptionist: RIVERSIDE_OFFER,
+      answers,
+    });
+
+  it('info request answered with a bare value is recorded and provide_info(source user) succeeds', async () => {
+    const h = infoFlow(['AB123456']);
+
+    await h.run();
+
+    expect(JSON.parse(String(toolResults(h.llm.calls[2])[0].content))).toEqual({
+      decision: 'provided',
+      field: 'insuranceNumber',
+      userSaid: 'AB123456',
+    });
+    expect(h.interpretLlm.calls).toHaveLength(0);
+    expect(h.state.userAnswers).toEqual([{ field: 'insuranceNumber', text: 'AB123456' }]);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBeFalsy();
+    expect(h.io.asked).toHaveLength(1);
+  });
+
+  it('info request answered "no" is not recorded as the field', async () => {
+    const h = infoFlow(['no']);
+
+    await h.run();
+
+    expect(JSON.parse(String(toolResults(h.llm.calls[2])[0].content))).toMatchObject({ decision: 'no' });
+    expect(h.state.userAnswers.some(a => a.field !== undefined)).toBe(false);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBe(true);
+  });
+
+  it('info request with timeout then empty answer re-asks once, then reports no answer', async () => {
+    const h = infoFlow([null, '   ']);
+
+    await h.run();
+
+    expect(h.io.asked.map(a => a.attempt)).toEqual([1, 2]);
+    expect(toolResults(h.llm.calls[2])[0].content).toBe(NO_ANSWER);
+    expect(h.state.userAnswers).toEqual([]);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBe(true);
+  });
+
+  it('approval + field answered with a bare "yes please" approves but does not record the field', async () => {
+    const h = setup({
+      clinicId: 'riverside',
+      caller: [
+        INTRO,
+        {
+          tools: [
+            {
+              name: 'ask_user',
+              input: {
+                question: 'There is a £20 fee and they need your insurance number. OK?',
+                offerId: 'off-1',
+                approvalFor: ['fee'],
+                field: 'insuranceNumber',
+              },
+            },
+          ],
+        },
+        { tools: [{ name: 'provide_info', input: { offerId: 'off-1', field: 'insuranceNumber', source: 'user' } }] },
+        endCall('not_booked', 'Done.'),
+      ],
+      receptionist: RIVERSIDE_OFFER,
+      answers: ['yes please'],
+    });
+
+    await h.run();
+
+    expect(h.state.approvals).toEqual([{ offerId: 'off-1', kinds: ['fee'] }]);
+    expect(h.state.userAnswers).toEqual([{ text: 'yes please' }]);
+    expect(toolResults(h.llm.calls[3])[0].is_error).toBe(true);
+  });
+
   // ─── R12: live line events ─────────────────────────────────────────────────────
 
   it('emits hold start before the hold sleep completes, hold end after', async () => {

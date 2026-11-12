@@ -15,7 +15,7 @@ import type { ServerMsg } from '../shared/protocol.js';
 import type { ApprovalKind, CallOutcome, Offer, Speaker, TranscriptLine } from '../shared/types.js';
 import { callerToolDefs, execLocal, type CallState } from './agents/callerTools.js';
 import { callerSystemPrompt } from './agents/prompts.js';
-import { interpretAnswer } from './interpret.js';
+import { hasContentBeyondYes, interpretAnswer, isClearNo } from './interpret.js';
 import { evaluateOffer } from './gate.js';
 import { toIcs } from './calendar.js';
 
@@ -209,22 +209,55 @@ class Call {
         this.deps.io.emit({ type: 'needs_user', question, timeoutMs: CHECKIN_TIMEOUT_MS, attempt });
         await this.speakTo('user', 'assistant', question);
         const answer = await this.untilAborted(this.deps.io.askUser(question, CHECKIN_TIMEOUT_MS, attempt));
-        if (answer === null) continue;
+        if (answer === null || answer.trim() === '') continue; // timeout or empty → re-ask once
         this.log('user', answer);
-        const { decision } = await interpretAnswer(answer, question, this.deps.interpretLlm);
-        this.checkAbort();
-        // Only a clear "yes" answer counts as the user supplying `field` (never unclear/no).
-        this.state.userAnswers.push(field && decision === 'yes' ? { field, text: answer } : { text: answer });
-        if (decision === 'unclear') continue;
-        if (decision === 'yes' && offerId && approvalFor.length > 0) {
-          this.state.approvals.push({ offerId, kinds: approvalFor });
-        }
-        return JSON.stringify({ decision, userSaid: answer });
+        const result =
+          field !== undefined && approvalFor.length === 0
+            ? this.recordInfo(field, answer)
+            : await this.recordDecision(answer, question, offerId, approvalFor, field);
+        if (result !== undefined) return result;
       }
       return NO_ANSWER_RESULT;
     } finally {
       this.setPhase(resumePhase);
     }
+  }
+
+  /**
+   * Info request (field, no approvalFor): any non-empty answer that is not a
+   * clear "no" IS the info, so a bare "AB123456" counts without needing a yes.
+   */
+  private recordInfo(field: string, answer: string): string {
+    if (isClearNo(answer)) {
+      this.state.userAnswers.push({ text: answer });
+      return JSON.stringify({ decision: 'no', userSaid: answer });
+    }
+    this.state.userAnswers.push({ field, text: answer });
+    return JSON.stringify({ decision: 'provided', field, userSaid: answer });
+  }
+
+  /**
+   * Approval (or plain) question: interpretAnswer decides yes/no/unclear, and
+   * unclear means re-ask (undefined). If a field is asked for as well ("£20 fee
+   * and your insurance number — OK?"), it is recorded only on a yes whose text
+   * says more than the yes itself ("yes please" alone supplies no info).
+   */
+  private async recordDecision(
+    answer: string,
+    question: string,
+    offerId: string | undefined,
+    approvalFor: ApprovalKind[],
+    field: string | undefined,
+  ): Promise<string | undefined> {
+    const { decision } = await interpretAnswer(answer, question, this.deps.interpretLlm);
+    this.checkAbort();
+    const suppliesField = field !== undefined && decision === 'yes' && hasContentBeyondYes(answer);
+    this.state.userAnswers.push(suppliesField ? { field, text: answer } : { text: answer });
+    if (decision === 'unclear') return undefined;
+    if (decision === 'yes' && offerId && approvalFor.length > 0) {
+      this.state.approvals.push({ offerId, kinds: approvalFor });
+    }
+    return JSON.stringify({ decision, userSaid: answer });
   }
 
   // ─── Line events and speech ─────────────────────────────────────────────────

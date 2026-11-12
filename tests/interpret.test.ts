@@ -1,6 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { interpretAnswer } from '../src/server/interpret.js';
+import { interpretAnswer, isClearNo, hasContentBeyondYes } from '../src/server/interpret.js';
 import { fakeLlm } from './helpers/fakeLlm.js';
+
+describe('answer helpers', () => {
+  it('isClearNo matches only a leading no', () => {
+    expect(isClearNo('no')).toBe(true);
+    expect(isClearNo("  Don't know it")).toBe(true);
+    expect(isClearNo('AB123456')).toBe(false);
+    expect(isClearNo("it's RX-1234")).toBe(false);
+  });
+
+  it('hasContentBeyondYes ignores bare agreement', () => {
+    expect(hasContentBeyondYes('yes please')).toBe(false);
+    expect(hasContentBeyondYes('Yeah, ok, go ahead. Thanks!')).toBe(false);
+    expect(hasContentBeyondYes('yes, and my insurance number is RX-1234')).toBe(true);
+    expect(hasContentBeyondYes('sure, AB123456')).toBe(true);
+  });
+});
 
 const QUESTION = 'Can you do Tuesday at 10am?';
 

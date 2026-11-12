@@ -23,6 +23,23 @@ type Decision = z.infer<typeof DecisionSchema>;
 const YES_RE = /^(yes|yeah|yep|sure|ok(ay)?|fine|that'?s fine|go ahead|book it)\b/i;
 const NO_RE = /^(no|nope|don'?t|not)\b/i;
 
+/** Words that carry no information beyond agreement ("yes please", "ok, go ahead"). */
+const AGREEMENT_WORDS_RE =
+  /\b(yes|yeah|yep|sure|ok(ay)?|fine|that'?s fine|go ahead|book it|please|thanks|thank you)\b/gi;
+
+/** True when the answer opens with a clear "no" (the same fast path interpretAnswer uses). */
+export function isClearNo(answer: string): boolean {
+  return NO_RE.test(answer.trim());
+}
+
+/**
+ * True when the answer says more than a bare agreement: "yes please" → false,
+ * "yes, my insurance number is RX-1234" → true.
+ */
+export function hasContentBeyondYes(answer: string): boolean {
+  return answer.replace(AGREEMENT_WORDS_RE, '').replace(/[^\p{L}\p{N}]+/gu, '').length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
