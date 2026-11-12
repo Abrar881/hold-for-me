@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ClientMsg } from '../../shared/protocol.js';
 import type { Capabilities } from '../capabilities.js';
 import { startListening } from '../browserSpeech.js';
-import { shouldStartListening } from '../checkinGating.js';
 
 interface Props {
   question: string;
@@ -30,10 +29,10 @@ export function CheckIn({ question, timeoutMs, capabilities, readyToListen, send
     send({ type: 'user_utterance', text });
   }, [send]);
 
-  // Auto-start listening only once the Player has finished playing queued audio.
-  // Uses the pure shouldStartListening gate to avoid starting during TTS.
+  // Auto-start listening only once readyToListen is true (the question utterance
+  // has been played) and no answer has been sent yet.
   useEffect(() => {
-    if (!shouldStartListening(readyToListen, canSpeak, sentRef.current)) return;
+    if (!readyToListen || !canSpeak || sentRef.current) return;
     setListening(true);
     try {
       stopRef.current = startListening(

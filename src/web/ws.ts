@@ -23,6 +23,11 @@ export interface SocketState {
   outcome?: CallOutcome;
   ics?: string;
   callPhase?: 'dialing' | 'ivr' | 'hold' | 'talking' | 'paused' | 'ended';
+  /**
+   * The id of the first channel:'user' utterance that arrives after a needs_user.
+   * undefined until that utterance is received.
+   */
+  pendingQuestionId?: string;
   listenIn: boolean;
   holdSeconds: number;
   error?: string;
@@ -65,13 +70,24 @@ function reducer(state: SocketState, action: Action): SocketState {
             transcript: [],
             request: undefined,
             pendingQuestion: undefined,
+            pendingQuestionId: undefined,
             outcome: undefined,
             ics: undefined,
             callPhase: undefined,
           };
-        case 'utterance':
+        case 'utterance': {
+          // Capture the id of the first channel:'user' utterance that arrives
+          // after needs_user, so App can gate listening until it has been played.
+          const pendingQuestionId =
+            state.phase === 'checkin' &&
+            msg.channel === 'user' &&
+            msg.id &&
+            state.pendingQuestionId === undefined
+              ? msg.id
+              : state.pendingQuestionId;
           return {
             ...state,
+            pendingQuestionId,
             transcript: [
               ...state.transcript,
               {
@@ -84,6 +100,7 @@ function reducer(state: SocketState, action: Action): SocketState {
               },
             ],
           };
+        }
         case 'request_understood':
           return {
             ...state,
@@ -115,6 +132,9 @@ function reducer(state: SocketState, action: Action): SocketState {
           return {
             ...state,
             phase: 'checkin',
+            // Reset pendingQuestionId — will be populated by the subsequent
+            // channel:'user' utterance carrying the spoken question.
+            pendingQuestionId: undefined,
             pendingQuestion: {
               question: msg.question,
               timeoutMs: msg.timeoutMs,

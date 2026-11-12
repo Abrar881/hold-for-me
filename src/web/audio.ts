@@ -141,10 +141,10 @@ export class Player {
       osc.start(now);
       osc.stop(now + 0.3);
       this.holdOscillators.push(osc);
-      // Clean up ended oscillators periodically
-      this.holdOscillators = this.holdOscillators.filter(o => {
-        try { return true; } catch { return false; }
-      });
+      // Remove from tracking once the oscillator has fully ended.
+      osc.onended = () => {
+        this.holdOscillators = this.holdOscillators.filter(o => o !== osc);
+      };
     };
 
     scheduleNote();

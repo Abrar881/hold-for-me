@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef } from 'react';
 import { useSocket } from './ws.js';
 import { detectCapabilities } from './capabilities.js';
 import { Player } from './audio.js';
@@ -6,6 +6,7 @@ import { RequestPanel } from './components/RequestPanel.js';
 import { CallPanel } from './components/CallPanel.js';
 import { CheckIn } from './components/CheckIn.js';
 import { ResultCard } from './components/ResultCard.js';
+import { shouldStartListening } from './checkinGating.js';
 import type { ClientMsg } from '../shared/protocol.js';
 
 const capabilities = detectCapabilities(window as any);
@@ -27,17 +28,42 @@ const AlertIcon = () => (
 export function App() {
   const { state, send } = useSocket();
   const playerRef = useRef<Player | null>(null);
-  // playerIdle tracks whether the Player's queue is empty.
-  // CheckIn uses this to gate auto-listening until the question utterance has played.
-  const [playerIdle, setPlayerIdle] = useState(true);
 
-  // Initialise the player once, with a stable send reference.
+  // Set of utterance ids that the Player has confirmed as played.
+  // Mutated in-place; we use a tick counter to trigger re-renders when the
+  // specific question utterance id is added.
+  const playedIdsRef = useRef(new Set<string>());
+  const [, forceRender] = useReducer(x => x + 1, 0);
+
+  // Always-current ref so the Player callback (created once) can read the
+  // latest pendingQuestionId without a stale closure.
+  const pendingQuestionIdRef = useRef(state.pendingQuestionId);
+  pendingQuestionIdRef.current = state.pendingQuestionId;
+
+  // Initialise the player once. Intercept `played` messages to track which
+  // utterances have finished — used to gate CheckIn's auto-listen.
   useEffect(() => {
-    const player = new Player((msg: ClientMsg) => send(msg));
+    const player = new Player((msg: ClientMsg) => {
+      if (msg.type === 'played') {
+        playedIdsRef.current.add(msg.id);
+        // If this was the pending question utterance, force a re-render so
+        // readyToListen becomes true and CheckIn starts listening.
+        if (msg.id === pendingQuestionIdRef.current) {
+          forceRender();
+        }
+      }
+      send(msg);
+    });
     playerRef.current = player;
-    // Fire setPlayerIdle(true) whenever the queue drains.
-    return player.onIdle(() => setPlayerIdle(true));
   }, [send]);
+
+  // Reset the played-ids set at the start of each new check-in cycle so a
+  // replayed question id from an earlier attempt cannot prematurely open the mic.
+  useEffect(() => {
+    if (state.phase === 'checkin') {
+      playedIdsRef.current = new Set();
+    }
+  }, [state.pendingQuestion]);
 
   // Sync listen-in state to player.
   useEffect(() => {
@@ -51,7 +77,6 @@ export function App() {
     if (!player) return;
     const newLines = state.transcript.slice(prevTranscriptLen.current);
     prevTranscriptLen.current = state.transcript.length;
-    let enqueued = false;
     for (const line of newLines) {
       if (line.id) {
         player.enqueue({
@@ -63,11 +88,8 @@ export function App() {
           mime: line.mime,
           speechMode: state.speechMode,
         });
-        enqueued = true;
       }
     }
-    // Mark as not-idle as soon as work is queued; onIdle fires when done.
-    if (enqueued) setPlayerIdle(false);
   }, [state.transcript, state.speechMode]);
 
   // Handle hold music.
@@ -103,8 +125,17 @@ export function App() {
     }
   }, [state.transcript]);
 
-  const noSpeech = !capabilities.recognition || !capabilities.mic;
+  // Compute readyToListen using the pure gating function.
+  // true only once the specific question utterance has been played.
+  const canSpeak = capabilities.recognition && capabilities.mic;
+  const readyToListen = shouldStartListening(
+    state.pendingQuestionId,
+    playedIdsRef.current,
+    canSpeak,
+    false, // alreadySent is CheckIn's own concern via sentRef
+  );
 
+  const noSpeech = !canSpeak;
   const badgeClass = `header-badge${state.speechMode === 'openai' ? ' openai' : ''}`;
   const badgeLabel = state.speechMode === 'openai' ? 'voice: OpenAI ✓' : 'voice: browser';
 
@@ -161,7 +192,7 @@ export function App() {
             question={state.pendingQuestion.question}
             timeoutMs={state.pendingQuestion.timeoutMs}
             capabilities={capabilities}
-            readyToListen={playerIdle}
+            readyToListen={readyToListen}
             send={send}
           />
         )}

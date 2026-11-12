@@ -71,11 +71,20 @@ function buildCallScript(scenarioId: string): ServerMsg[] {
       channel: 'call',
     },
     { type: 'call_status', phase: 'paused' },
+    // needs_user arrives first; the spoken question follows as a channel:'user' utterance.
+    // CheckIn waits for that utterance to finish playing before opening the mic.
     {
       type: 'needs_user',
       question: 'They offer Thursday 19 Nov at 10:30. Shall I book that?',
       timeoutMs: 15000,
       attempt: 1,
+    },
+    {
+      type: 'utterance',
+      id: 'q-1',
+      speaker: 'assistant',
+      text: 'They offer Thursday 19 Nov at 10:30. Shall I book that?',
+      channel: 'user',
     },
   ];
 }
