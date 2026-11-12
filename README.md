@@ -177,7 +177,8 @@ The agent's trustworthiness is not left to prompt-writing alone. Each rule is a 
 - **Half-duplex.** The agent cannot interrupt while the receptionist is speaking, and vice versa. Barge-in and streaming TTS are listed as next steps.
 - **Demo data.** `data/profile.json` and `data/clinics/*.json` are static fixtures. No real calendar integration (Google / Outlook) exists in v1.
 - **Browser speech mode is Chrome/Edge only.** The Web Speech API's `SpeechRecognition` interface is not available in Firefox or Safari.
-- **No persistence.** Sessions are in-memory. `data/calendar.json` is written locally on booking; there is no database or multi-user support.
+- **No persistence.** Sessions are in-memory. Bookings are appended to `data/calendar.bookings.json` locally; there is no database or multi-user support.
+- **Prompts not yet tuned against live models.** The full test suite runs offline with scripted fake LLM responses. The agent prompts have not yet been exercised against the real Claude API at volume — run `npm run scenario -- bright-smile --runs 5 --fast` (and the other clinics) with a key to validate. Firefox/no-mic users get a typed fallback.
 
 ## Project structure
 
